@@ -1,45 +1,31 @@
 [app]
-
 title = TVPlayer
 package.name = tvplayer
 package.domain = org.tvplayer
 source.dir = .
-source.include_exts = py,png,jpg,kv,atlas
+source.include_exts = py,png,jpg,kv,atlas,json
+source.include_patterns = android_main.py
 version = 1.0.0
-requirements = python3,kivy==2.2.1,requests,jsonstore
+requirements = python3,kivy==2.2.1
 orientation = landscape
-osx.package_name = TVPlayer
-osx.bundle_identifier = org.tvplayer.tvplayer
+fullscreen = 1
 
-# Android
+# Android 4.4 (API 19) ~ Android 13 (API 33)
 android.api = 33
+android.minapi = 19
 android.ndk = 25b
 android.sdk = 33
-android.build_tools = 33.0.2
-android.minapi = 21
-android.gradle_dependencies = 
-android.permissions = INTERNET
-android.add_src = 
-android.arch = arm64-v8a,armeabi-v7a
-android.private_storage_path = 
-android.ndk_path = 
-android.sdk_path = 
-android.ndk_api = 21
-android.enable_apk_aab = apk
-android.allow_download_prebuilts = True
+android.archs = arm64-v8a,armeabi-v7a
+android.permissions = INTERNET,ACCESS_NETWORK_STATE,WRITE_SETTINGS
 android.accept_sdk_license = True
+android.allow_backup = True
+android.entrypoint = org.kivy.android.PythonActivity
+android.presplash_color = #000000
+
+# entry point
+# buildozer uses main.py by default; we rename via p4a bootstrap
+# Keep android_main.py and copy as main.py during build if needed
 
 [buildozer]
-
 log_level = 2
 warn_on_root = 1
-
-# Avoid cloning recipes
-p4a.local_recipes =
-p4a.branch =
-p4a.source_dir = /opt/p4a
-p4a.requirements = python3,kivy
-p4a.env =
-
-[app:ios]
-ios.codesign.allowed = False

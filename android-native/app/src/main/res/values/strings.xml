@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TVPlayer</string>
+    <string name="search_hint">搜索频道</string>
+    <string name="refresh">刷新</string>
+    <string name="switch_source">换源</string>
+    <string name="favorites">收藏</string>
+    <string name="all">全部</string>
+    <string name="hide_panel">隐藏</string>
+    <string name="show_panel">显示</string>
+    <string name="lock">锁定</string>
+    <string name="unlock">解锁</string>
+    <string name="loading">加载中...</string>
+    <string name="cache_loaded">缓存已加载</string>
+    <string name="load_failed">加载失败</string>
+    <string name="volume">音量</string>
+    <string name="brightness">亮度</string>
+</resources>
