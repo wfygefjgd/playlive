@@ -1,0 +1,38 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y git zip unzip openjdk-17-jdk python3-pip \
+            autoconf automake libtool pkg-config ccache
+          pip install --upgrade pip buildozer cython
+          
+      - name: Build with Buildozer
+        run: |
+          export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
+          buildozer android debug
+        env:
+          BUILDOZER_WARN_ON_ROOT: 0
+          
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TVPlayer-APK
+          path: bin/*.apk
+          if-no-files-found: warn
