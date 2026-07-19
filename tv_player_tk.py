@@ -213,7 +213,6 @@ class TVPlayerApp:
         self._loading = False
         self._select_mode = False
         self._panel_visible = True
-        self._float_btn_win = None
 
         self._find_mpv()
         self._setup_ui()
@@ -325,6 +324,13 @@ class TVPlayerApp:
 
         self.video_panel = tk.Canvas(self.root, bg="#000000", highlightthickness=0)
         self.video_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        self.float_frame = tk.Frame(self.root, bg="#000000")
+        self.toggle_btn = tk.Button(self.float_frame, text="▶", bg="#000000", fg="#e0e0e0",
+                                   activebackground="#333333", foreground="white",
+                                   relief=tk.FLAT, font=("", 14), bd=0,
+                                   command=self._toggle_panel)
+        self.toggle_btn.pack(padx=2, pady=2)
 
         self.video_panel.bind("<Button-1>", lambda e: self._toggle_pause())
 
@@ -587,55 +593,20 @@ class TVPlayerApp:
     def _toggle_panel(self):
         self._panel_visible = not self._panel_visible
         if self._panel_visible:
-            self._hide_float_btn()
             self.left_frame.pack(side=tk.LEFT, fill=tk.Y)
-            self.toggle_btn.config(text="隐藏面板 ▶")
+            self.toggle_btn.config(text="◀ 隐藏面板")
+            self.float_frame.place_forget()
         else:
             self.left_frame.pack_forget()
-            self.toggle_btn.config(text="◀ 显示面板")
+            self.toggle_btn.config(text="▶ 显示面板")
             self._show_float_btn()
 
     def _show_float_btn(self):
-        if self._float_btn_win:
-            return
-        self._float_btn_win = tk.Toplevel(self.root)
-        self._float_btn_win.overrideredirect(True)
-        self._float_btn_win.attributes("-topmost", True)
-        self._float_btn_win.configure(bg="#000000")
-        btn = tk.Button(self._float_btn_win, text="▶", bg="#000000", fg="#e0e0e0",
-                       activebackground="#333333", activeforeground="white",
-                       relief=tk.FLAT, font=("", 14), bd=0,
-                       command=self._toggle_panel)
-        btn.pack(padx=2, pady=2)
-        self._update_float_pos()
-        self._check_window_state()
-
-    def _check_window_state(self):
-        if not self._float_btn_win:
-            return
-        try:
-            state = self.root.wm_state()
-            if state == "iconic":
-                self._float_btn_win.withdraw()
-            else:
-                if not self._float_btn_win.winfo_viewable():
-                    self._float_btn_win.deiconify()
-                self._update_float_pos()
-        except:
-            pass
-        self.root.after(30, self._check_window_state)
-
-    def _update_float_pos(self):
-        if not self._float_btn_win:
-            return
-        x = self.root.winfo_rootx()
-        y = self.root.winfo_rooty()
-        self._float_btn_win.geometry(f"40x40+{x}+{y}")
+        self.root.update()
+        self.float_frame.place(x=0, y=0, anchor=tk.NW)
 
     def _hide_float_btn(self):
-        if self._float_btn_win:
-            self._float_btn_win.destroy()
-            self._float_btn_win = None
+        self.float_frame.place_forget()
 
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -643,7 +614,6 @@ class TVPlayerApp:
 
     def _on_close(self):
         self.stop_mpv()
-        self._hide_float_btn()
         self.root.destroy()
 
 if __name__ == "__main__":
