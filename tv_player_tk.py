@@ -618,17 +618,16 @@ class TVPlayerApp:
             if state == "iconic":
                 self._float_btn_win.withdraw()
             else:
-                if self._float_btn_win.winfo_viewable() == 0 and not self._panel_visible:
+                if not self._float_btn_win.winfo_viewable():
                     self._float_btn_win.deiconify()
-                    self._update_float_pos()
+                self._update_float_pos()
         except:
             pass
-        self.root.after(100, self._check_window_state)
+        self.root.after(30, self._check_window_state)
 
     def _update_float_pos(self):
         if not self._float_btn_win:
             return
-        self.root.update_idletasks()
         x = self.root.winfo_rootx()
         y = self.root.winfo_rooty()
         self._float_btn_win.geometry(f"40x40+{x}+{y}")
