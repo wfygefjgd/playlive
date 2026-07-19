@@ -391,7 +391,6 @@ public class MainActivity extends AppCompatActivity {
     private void refreshFromNetwork(boolean allSources) {
         if (loading) return;
         loading = true;
-        status.setText(getString(R.string.loading));
         netPool.execute(() -> {
             List<Channel> loaded = new ArrayList<>();
             Set<String> seen = new HashSet<>();
@@ -432,7 +431,6 @@ public class MainActivity extends AppCompatActivity {
 
     private void switchSource() {
         sourceIndex = (sourceIndex + 1) % SOURCES.length;
-        status.setText("切换 " + SOURCES[sourceIndex][0] + "...");
         refreshFromNetwork(false);
     }
 
@@ -501,14 +499,14 @@ public class MainActivity extends AppCompatActivity {
     private String normalizeName(String name) {
         if (name == null) return "";
         String n = name.replaceAll("[\\s\\-—_·.．,，、/\\\\|()（）\\[\\]【】]", "").toLowerCase();
-        n = n.replaceAll("(hd|fhd|uhd|sd|4k|8k|1080p?|720p?|576p?|高清|超清|标清|蓝光|流畅|高清|备用|线路\\d*|源\\d*|\\d+)$", "");
-        n = n.replaceAll("^(cctv)(\\d+)$", "$1$2");
+        n = n.replaceAll("(fhd|uhd|hd|sd|4k|8k|1080p|720p|576p|高清|超清|标清|蓝光|流畅|备用[\\d]*|线路[\\d]+|源[\\d]+|直播|在线|综合|频道)$", "");
+        n = n.replaceAll("(fhd|uhd|hd|sd)$", "");
         return n;
     }
 
     private void deduplicateChannels() {
         if (allChannels.isEmpty()) return;
-        status.setText("筛选中...");
+        Toast.makeText(this, "筛选中...", Toast.LENGTH_SHORT).show();
         netPool.execute(() -> {
             Map<String, List<Channel>> groups = new LinkedHashMap<>();
             for (Channel ch : allChannels) {
@@ -524,13 +522,23 @@ public class MainActivity extends AppCompatActivity {
             for (Map.Entry<String, List<Channel>> entry : groups.entrySet()) {
                 List<Channel> group = entry.getValue();
                 if (group.size() <= 1) {
-                    kept++;
+                    if (isPlayable(group.get(0))) {
+                        kept++;
+                    } else {
+                        toHide.add(group.get(0).url);
+                    }
                     continue;
                 }
                 Channel best = testBestChannel(group);
-                kept++;
-                for (Channel ch : group) {
-                    if (!ch.url.equals(best.url)) {
+                if (best != null) {
+                    kept++;
+                    for (Channel ch : group) {
+                        if (!ch.url.equals(best.url)) {
+                            toHide.add(ch.url);
+                        }
+                    }
+                } else {
+                    for (Channel ch : group) {
                         toHide.add(ch.url);
                     }
                 }
@@ -544,7 +552,7 @@ public class MainActivity extends AppCompatActivity {
             final int keptCount = kept;
             mainHandler.post(() -> {
                 applyFilter();
-                status.setText("筛选完成: 保留 " + keptCount + " 个, 隐藏 " + hiddenCount + " 个重复");
+                Toast.makeText(MainActivity.this, "筛选完成: 保留 " + keptCount + " 个, 隐藏 " + hiddenCount + " 个", Toast.LENGTH_LONG).show();
                 if (!filtered.isEmpty()) {
                     currentIndex = 0;
                     playCurrent();
@@ -553,8 +561,30 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    private boolean isPlayable(Channel ch) {
+        try {
+            HttpURLConnection conn = (HttpURLConnection) new URL(ch.url).openConnection();
+            conn.setConnectTimeout(3000);
+            conn.setReadTimeout(3000);
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
+            conn.setInstanceFollowRedirects(true);
+            int code = conn.getResponseCode();
+            if (code >= 200 && code < 400) {
+                InputStream is = conn.getInputStream();
+                byte[] buf = new byte[4096];
+                int n = is.read(buf);
+                is.close();
+                conn.disconnect();
+                return n > 0;
+            }
+            conn.disconnect();
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
     private Channel testBestChannel(List<Channel> group) {
-        Channel best = group.get(0);
+        Channel best = null;
         long bestTime = Long.MAX_VALUE;
         for (Channel ch : group) {
             try {
