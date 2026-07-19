@@ -16,18 +16,22 @@ jobs:
         with:
           python-version: "3.9"
           
-      - name: Verify python3 is 3.9 (do NOT touch system python3)
+      - name: Create venv with build tools (isolates from system python3.14)
         run: |
-          which python3
-          python3 --version
+          python3 -m venv /opt/venv
+          source /opt/venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install "buildozer==1.5.0" "cython==0.29.33" "kivy==2.2.1"
+          which python
+          python --version
+          which cython
+          head -1 $(which cython)
           
       - name: Install system dependencies
         run: |
           sudo apt update
           sudo apt install -y git zip unzip openjdk-17-jdk \
             autoconf automake libtool libltdl-dev pkg-config ccache curl
-          python3 -m pip install --upgrade pip
-          python3 -m pip install "buildozer==1.5.0" "cython==0.29.33" "kivy==2.2.1"
           
       - name: Pre-clone python-for-android to /opt/p4a
         run: |
@@ -55,14 +59,13 @@ jobs:
           
       - name: Build with Buildozer
         run: |
+          source /opt/venv/bin/activate
           export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
           export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
           export ACLOCAL_PATH=/usr/share/aclocal
-          # Ensure setup-python 3.9 shadows system python3 in this shell
-          export PATH="$(dirname $(which python3)):$PATH"
-          echo "python3 = $(which python3) ; version = $(python3 --version)"
           export BUILDOZER_WARN_ON_ROOT=0
-          python3 -m buildozer android debug
+          echo "python = $(which python) ; version = $(python --version)"
+          buildozer android debug
         env:
           BUILDOZER_WARN_ON_ROOT: 0
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
