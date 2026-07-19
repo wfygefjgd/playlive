@@ -16,13 +16,25 @@ jobs:
         with:
           python-version: "3.9"
           
+      - name: Force python3 to point to 3.9 (override system 3.14)
+        run: |
+          PY=$(which python3)
+          echo "setup-python python3 = $PY"
+          python3 --version
+          sudo update-alternatives --install /usr/bin/python3 python3 "$PY" 99
+          sudo update-alternatives --set python3 "$PY"
+          # also override plain python if it exists
+          sudo update-alternatives --install /usr/bin/python python "$PY" 99 2>/dev/null || true
+          sudo update-alternatives --set python "$PY" 2>/dev/null || true
+          python3 --version
+          
       - name: Install system dependencies
         run: |
           sudo apt update
           sudo apt install -y git zip unzip openjdk-17-jdk python3-pip \
             autoconf automake libtool libltdl-dev pkg-config ccache curl
-          pip install --upgrade pip
-          pip install "buildozer==1.5.0" "cython==0.29.33" "kivy==2.2.1"
+          python3 -m pip install --upgrade pip
+          python3 -m pip install "buildozer==1.5.0" "cython==0.29.33" "kivy==2.2.1"
           
       - name: Pre-clone python-for-android to /opt/p4a
         run: |
@@ -53,10 +65,9 @@ jobs:
           export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
           export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
           export ACLOCAL_PATH=/usr/share/aclocal
-          export PATH=/opt/hostedtoolcache/Python/3.9.25/x64/bin:$PATH
-          python3 --version
+          echo "python3 = $(which python3) ; version = $(python3 --version)"
           export BUILDOZER_WARN_ON_ROOT=0
-          buildozer android debug
+          python3 -m buildozer android debug
         env:
           BUILDOZER_WARN_ON_ROOT: 0
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
