@@ -40,7 +40,8 @@ jobs:
           
       - name: Set up Android SDK manually
         run: |
-          export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          export PATH=$JAVA_HOME/bin:$PATH
           export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
           mkdir -p $ANDROID_HOME/cmdline-tools
           cd $ANDROID_HOME/cmdline-tools
@@ -55,12 +56,14 @@ jobs:
           ln -sf $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager $ANDROID_HOME/tools/bin/sdkmanager
           ln -sf $ANDROID_HOME/cmdline-tools/latest/bin/avdmanager $ANDROID_HOME/tools/bin/avdmanager
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
           echo "PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_ENV
           
       - name: Build with Buildozer
         run: |
           source /opt/venv/bin/activate
-          export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          export PATH=$JAVA_HOME/bin:$PATH
           export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
           export ACLOCAL_PATH=/usr/share/aclocal
           export BUILDOZER_WARN_ON_ROOT=0
@@ -71,6 +74,7 @@ jobs:
         env:
           BUILDOZER_WARN_ON_ROOT: 0
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
           ACLOCAL_PATH: /usr/share/aclocal
           
       - name: Upload APK
