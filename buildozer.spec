@@ -27,6 +27,7 @@ android.sdk_path =
 android.ndk_api = 21
 android.enable_apk_aab = apk
 android.allow_download_prebuilts = True
+android.accept_sdk_license = True
 
 [buildozer]
 
@@ -35,9 +36,10 @@ warn_on_root = 1
 
 # Avoid cloning recipes
 p4a.local_recipes =
-p4a.branch = develop
+p4a.branch =
+p4a.source_dir = /opt/p4a
 p4a.requirements = python3,kivy
-p4a.env = 
+p4a.env =
 
 [app:ios]
 ios.codesign.allowed = False
