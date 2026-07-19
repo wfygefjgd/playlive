@@ -21,11 +21,17 @@ jobs:
           sudo apt update
           sudo apt install -y git zip unzip openjdk-17-jdk python3-pip \
             autoconf automake libtool pkg-config ccache
-          pip install --upgrade pip buildozer cython
+          pip install --upgrade pip buildozer cython "kivy==2.2.1"
+          
+      - name: Accept Android SDK licenses
+        run: |
+          export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
+          yes | sdkmanager --licenses || true
           
       - name: Build with Buildozer
         run: |
           export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
+          export BUILDOZER_WARN_ON_ROOT=0
           buildozer android debug
         env:
           BUILDOZER_WARN_ON_ROOT: 0

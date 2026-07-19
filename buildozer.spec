@@ -15,6 +15,7 @@ osx.bundle_identifier = org.tvplayer.tvplayer
 android.api = 33
 android.ndk = 25b
 android.sdk = 33
+android.build_tools = 33.0.2
 android.minapi = 19
 android.gradle_dependencies = 
 android.permissions = INTERNET
