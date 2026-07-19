@@ -92,4 +92,14 @@ public class StorageHelper {
     public boolean isHidden(String url) {
         return loadHidden().contains(url);
     }
+
+    public void hideChannel(String url) {
+        Set<String> hidden = loadHidden();
+        hidden.add(url);
+        saveHidden(hidden);
+    }
+
+    public void unhideAll() {
+        saveHidden(new HashSet<>());
+    }
 }

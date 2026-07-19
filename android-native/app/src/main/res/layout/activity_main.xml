@@ -111,8 +111,22 @@
                 android:layout_weight="1"
                 android:layout_marginLeft="2dp"
                 android:layout_marginStart="2dp"
+                android:layout_marginEnd="2dp"
+                android:layout_marginRight="2dp"
                 android:background="#0E639C"
                 android:text="@string/favorites"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/btn_dedup"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:layout_marginLeft="2dp"
+                android:layout_marginStart="2dp"
+                android:background="#8E44AD"
+                android:text="@string/dedup"
                 android:textColor="#FFFFFF"
                 android:textSize="12sp" />
         </LinearLayout>

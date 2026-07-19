@@ -38,7 +38,9 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -66,6 +68,7 @@ public class MainActivity extends AppCompatActivity {
     private Button btnRefresh;
     private Button btnSource;
     private Button btnFav;
+    private Button btnDedup;
     private EditText search;
     private TextView status;
     private TextView channelLabel;
@@ -131,6 +134,7 @@ public class MainActivity extends AppCompatActivity {
         btnRefresh = findViewById(R.id.btn_refresh);
         btnSource = findViewById(R.id.btn_source);
         btnFav = findViewById(R.id.btn_fav);
+        btnDedup = findViewById(R.id.btn_dedup);
         search = findViewById(R.id.search);
         status = findViewById(R.id.status);
         channelLabel = findViewById(R.id.channel_label);
@@ -152,8 +156,18 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onPlayerError(com.google.android.exoplayer2.PlaybackException error) {
-                runOnUiThread(() -> Toast.makeText(MainActivity.this,
-                        "播放出错: " + error.getLocalizedMessage(), Toast.LENGTH_SHORT).show());
+                runOnUiThread(() -> {
+                    if (filtered.isEmpty() || currentIndex < 0 || currentIndex >= filtered.size()) return;
+                    Channel bad = filtered.get(currentIndex);
+                    storage.hideChannel(bad.url);
+                    Toast.makeText(MainActivity.this,
+                            "已隐藏失效频道: " + bad.name, Toast.LENGTH_SHORT).show();
+                    applyFilter();
+                    if (!filtered.isEmpty()) {
+                        if (currentIndex >= filtered.size()) currentIndex = 0;
+                        playCurrent();
+                    }
+                });
             }
         });
     }
@@ -206,6 +220,10 @@ public class MainActivity extends AppCompatActivity {
             showFavOnly = !showFavOnly;
             btnFav.setText(showFavOnly ? getString(R.string.all) : getString(R.string.favorites));
             applyFilter();
+        });
+        btnDedup.setOnClickListener(v -> {
+            if (locked) return;
+            deduplicateChannels();
         });
     }
 
@@ -482,6 +500,95 @@ public class MainActivity extends AppCompatActivity {
         adapter.setSelected(currentIndex);
     }
 
+    private String normalizeName(String name) {
+        if (name == null) return "";
+        return name.replaceAll("[\\s\\-—_·.．,，、/\\\\|]", "").toLowerCase();
+    }
+
+    private void deduplicateChannels() {
+        if (allChannels.isEmpty()) return;
+        status.setText("筛选中...");
+        netPool.execute(() -> {
+            Map<String, List<Channel>> groups = new LinkedHashMap<>();
+            for (Channel ch : allChannels) {
+                String key = normalizeName(ch.name);
+                if (!groups.containsKey(key)) {
+                    groups.put(key, new ArrayList<>());
+                }
+                groups.get(key).add(ch);
+            }
+
+            Set<String> toHide = new HashSet<>();
+            int kept = 0;
+            for (Map.Entry<String, List<Channel>> entry : groups.entrySet()) {
+                List<Channel> group = entry.getValue();
+                if (group.size() <= 1) {
+                    kept++;
+                    continue;
+                }
+                Channel best = testBestChannel(group);
+                kept++;
+                for (Channel ch : group) {
+                    if (!ch.url.equals(best.url)) {
+                        toHide.add(ch.url);
+                    }
+                }
+            }
+
+            Set<String> hidden = storage.loadHidden();
+            hidden.addAll(toHide);
+            storage.saveHidden(hidden);
+
+            final int hiddenCount = toHide.size();
+            final int keptCount = kept;
+            mainHandler.post(() -> {
+                applyFilter();
+                status.setText("筛选完成: 保留 " + keptCount + " 个, 隐藏 " + hiddenCount + " 个重复");
+                if (!filtered.isEmpty()) {
+                    currentIndex = 0;
+                    playCurrent();
+                }
+            });
+        });
+    }
+
+    private Channel testBestChannel(List<Channel> group) {
+        Channel best = group.get(0);
+        long bestTime = Long.MAX_VALUE;
+        for (Channel ch : group) {
+            try {
+                long start = System.currentTimeMillis();
+                HttpURLConnection conn = (HttpURLConnection) new URL(ch.url).openConnection();
+                conn.setConnectTimeout(4000);
+                conn.setReadTimeout(4000);
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0");
+                conn.setInstanceFollowRedirects(true);
+                int code = conn.getResponseCode();
+                if (code >= 200 && code < 400) {
+                    InputStream is = conn.getInputStream();
+                    byte[] buf = new byte[8192];
+                    int total = 0;
+                    long deadline = System.currentTimeMillis() + 3000;
+                    while (System.currentTimeMillis() < deadline) {
+                        int n = is.read(buf);
+                        if (n <= 0) break;
+                        total += n;
+                        if (total >= 65536) break;
+                    }
+                    is.close();
+                    long elapsed = System.currentTimeMillis() - start;
+                    if (total > 0 && elapsed < bestTime) {
+                        bestTime = elapsed;
+                        best = ch;
+                    }
+                }
+                conn.disconnect();
+            } catch (Exception ignored) {
+            }
+        }
+        return best;
+    }
+
     private void nextChannel() {
         if (filtered.isEmpty()) return;
         currentIndex = (currentIndex + 1) % filtered.size();
@@ -512,6 +619,13 @@ public class MainActivity extends AppCompatActivity {
             player.setMediaItem(item);
             player.prepare();
             player.play();
+            if (panelVisible && !locked) {
+                mainHandler.postDelayed(() -> {
+                    if (panelVisible && !locked) {
+                        togglePanel();
+                    }
+                }, 300);
+            }
         } catch (Exception e) {
             Toast.makeText(this, "播放失败: " + ch.name, Toast.LENGTH_SHORT).show();
         }

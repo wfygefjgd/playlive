@@ -15,4 +15,5 @@
     <string name="load_failed">加载失败</string>
     <string name="volume">音量</string>
     <string name="brightness">亮度</string>
+    <string name="dedup">筛选</string>
 </resources>
