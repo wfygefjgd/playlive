@@ -3,9 +3,14 @@ __pycache__/
 *.pyo
 build/
 dist/
-*.spec
+# PyInstaller spec files only
+/TVPlayer.spec
+/TVPlayer_TK.spec
 *.exe
 *.zip
 *.log
 output.log
 err.log
+.buildozer/
+bin/
+
