@@ -7,79 +7,37 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-native
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up Python
-        uses: actions/setup-python@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
-          python-version: "3.9"
-          
-      - name: Create venv with build tools (isolates from system python3.14)
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK components
         run: |
-          python3 -m venv /opt/venv
-          source /opt/venv/bin/activate
-          python -m pip install --upgrade pip
-          pip install "buildozer==1.5.0" "cython==0.29.33" "kivy==2.2.1"
-          which python
-          python --version
-          which cython
-          head -1 $(which cython)
-          
-      - name: Install system dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y git zip unzip openjdk-17-jdk \
-            autoconf automake libtool libltdl-dev pkg-config ccache curl
-          
-      - name: Pre-clone python-for-android to /opt/p4a
-        run: |
-          sudo git clone --depth 1 -b master https://github.com/kivy/python-for-android.git /opt/p4a
-          sudo chmod -R 777 /opt/p4a
-          
-      - name: Set up Android SDK manually
-        run: |
-          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-          export PATH=$JAVA_HOME/bin:$PATH
-          export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
-          mkdir -p $ANDROID_HOME/cmdline-tools
-          cd $ANDROID_HOME/cmdline-tools
-          curl -sSL -o commandlinetools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q commandlinetools.zip
-          mv cmdline-tools latest
-          export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
-          yes | sdkmanager --licenses
           sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2"
-          # Symlink for buildozer compatibility (old tools/bin layout)
-          mkdir -p $ANDROID_HOME/tools/bin
-          ln -sf $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager $ANDROID_HOME/tools/bin/sdkmanager
-          ln -sf $ANDROID_HOME/cmdline-tools/latest/bin/avdmanager $ANDROID_HOME/tools/bin/avdmanager
-          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
-          echo "PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_ENV
-          
-      - name: Build with Buildozer
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew || true
+
+      - name: Build debug APK
         run: |
-          source /opt/venv/bin/activate
-          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-          export PATH=$JAVA_HOME/bin:$PATH
-          export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
-          export ACLOCAL_PATH=/usr/share/aclocal
-          export BUILDOZER_WARN_ON_ROOT=0
-          echo "python = $(which python) ; version = $(python --version)"
-          python -c "import cgi; print('cgi OK ->', cgi.__file__)"
-          echo "cython = $(which cython) ; shebang = $(head -1 $(which cython))"
-          buildozer android debug
-        env:
-          BUILDOZER_WARN_ON_ROOT: 0
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
-          JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
-          ACLOCAL_PATH: /usr/share/aclocal
-          
+          gradle assembleDebug --no-daemon || ./gradlew assembleDebug --no-daemon
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: TVPlayer-APK
-          path: bin/*.apk
-          if-no-files-found: warn
+          name: TVPlayer-debug-apk
+          path: android-native/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
