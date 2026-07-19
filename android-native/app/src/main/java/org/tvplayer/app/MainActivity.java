@@ -378,11 +378,11 @@ public class MainActivity extends AppCompatActivity {
             allChannels.clear();
             allChannels.addAll(cached);
             applyFilter();
-            status.setText(allChannels.size() + " 个频道 (缓存)");
             if (!filtered.isEmpty()) {
                 currentIndex = 0;
                 playCurrent();
             }
+            deduplicateChannels();
         } else {
             refreshFromNetwork(true);
         }
@@ -420,13 +420,11 @@ public class MainActivity extends AppCompatActivity {
                     allChannels.addAll(loaded);
                     storage.saveChannels(allChannels);
                     applyFilter();
-                    status.setText(allChannels.size() + " 个频道");
                     if (!filtered.isEmpty()) {
                         currentIndex = 0;
                         playCurrent();
                     }
-                } else {
-                    status.setText(getString(R.string.load_failed));
+                    deduplicateChannels();
                 }
             });
         });

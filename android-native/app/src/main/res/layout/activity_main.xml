@@ -137,7 +137,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:textColor="#888888"
-            android:textSize="11sp" />
+            android:textSize="11sp"
+            android:visibility="gone" />
     </LinearLayout>
 
     <!-- Hide/show panel button (top-left, same layer as lock) -->
