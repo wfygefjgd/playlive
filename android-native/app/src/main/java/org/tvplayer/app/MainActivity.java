@@ -500,7 +500,10 @@ public class MainActivity extends AppCompatActivity {
 
     private String normalizeName(String name) {
         if (name == null) return "";
-        return name.replaceAll("[\\s\\-—_·.．,，、/\\\\|]", "").toLowerCase();
+        String n = name.replaceAll("[\\s\\-—_·.．,，、/\\\\|()（）\\[\\]【】]", "").toLowerCase();
+        n = n.replaceAll("(hd|fhd|uhd|sd|4k|8k|1080p?|720p?|576p?|高清|超清|标清|蓝光|流畅|高清|备用|线路\\d*|源\\d*|\\d+)$", "");
+        n = n.replaceAll("^(cctv)(\\d+)$", "$1$2");
+        return n;
     }
 
     private void deduplicateChannels() {
