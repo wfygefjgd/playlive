@@ -6,7 +6,7 @@ package.domain = org.tvplayer
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas
 version = 1.0.0
-requirements = python3,kivy==2.2.1,requests,jsonstore
+requirements = python3,kivy==2.3.0,requests,jsonstore
 orientation = landscape
 osx.package_name = TVPlayer
 osx.bundle_identifier = org.tvplayer.tvplayer

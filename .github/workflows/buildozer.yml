@@ -22,7 +22,7 @@ jobs:
           sudo apt install -y git zip unzip openjdk-17-jdk python3-pip \
             autoconf automake libtool libltdl-dev pkg-config ccache curl
           pip install --upgrade pip
-          pip install "buildozer==1.5.0" "cython==0.29.33" "kivy==2.2.1"
+          pip install "buildozer==1.5.0" "cython==0.29.36" "kivy==2.3.0"
           
       - name: Pre-clone python-for-android to /opt/p4a
         run: |
@@ -53,6 +53,8 @@ jobs:
           export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
           export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
           export ACLOCAL_PATH=/usr/share/aclocal
+          export PATH=/opt/hostedtoolcache/Python/3.9.25/x64/bin:$PATH
+          python3 --version
           export BUILDOZER_WARN_ON_ROOT=0
           buildozer android debug
         env:
