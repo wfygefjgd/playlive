@@ -1,7 +1,6 @@
 package org.tvplayer.app;
 
 import android.graphics.Color;
-import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
@@ -17,26 +16,12 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.VH> {
         void onClick(int position);
     }
 
-    public interface OnChannelLongClick {
-        void onLongClick(int position);
-    }
-
     private final List<Channel> data = new ArrayList<>();
     private int selected = -1;
     private OnChannelClick click;
-    private OnChannelLongClick longClick;
-    private StorageHelper storage;
-
-    public void setStorage(StorageHelper storage) {
-        this.storage = storage;
-    }
 
     public void setOnChannelClick(OnChannelClick click) {
         this.click = click;
-    }
-
-    public void setOnChannelLongClick(OnChannelLongClick longClick) {
-        this.longClick = longClick;
     }
 
     public void setData(List<Channel> list) {
@@ -82,9 +67,7 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.VH> {
     @Override
     public void onBindViewHolder(@NonNull VH holder, int position) {
         Channel ch = data.get(position);
-        boolean fav = storage != null && storage.isFavorite(ch.url);
-        String prefix = fav ? "★ " : "▸ ";
-        holder.text.setText(prefix + ch.name);
+        holder.text.setText(ch.name);
         if (position == selected) {
             holder.text.setBackgroundColor(Color.parseColor("#094771"));
         } else {
@@ -94,12 +77,6 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.VH> {
             if (click != null) {
                 click.onClick(holder.getAdapterPosition());
             }
-        });
-        holder.itemView.setOnLongClickListener(v -> {
-            if (longClick != null) {
-                longClick.onLongClick(holder.getAdapterPosition());
-            }
-            return true;
         });
     }
 

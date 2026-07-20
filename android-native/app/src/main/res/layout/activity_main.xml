@@ -23,7 +23,8 @@
         android:textColor="#B3FFFFFF"
         android:textSize="14sp"
         android:shadowColor="#000000"
-        android:shadowRadius="4" />
+        android:shadowRadius="4"
+        android:visibility="gone" />
 
     <!-- Volume / brightness indicator -->
     <TextView
@@ -50,86 +51,12 @@
         android:orientation="vertical"
         android:padding="8dp">
 
-        <EditText
-            android:id="@+id/search"
-            android:layout_width="match_parent"
-            android:layout_height="40dp"
-            android:background="#1E1E1E"
-            android:hint="@string/search_hint"
-            android:textColor="#E0E0E0"
-            android:textColorHint="#888888"
-            android:paddingLeft="8dp"
-            android:paddingRight="8dp"
-            android:inputType="text"
-            android:imeOptions="actionSearch"
-            android:singleLine="true" />
-
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/channel_list"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:layout_marginTop="6dp"
             android:scrollbars="vertical" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="40dp"
-            android:orientation="horizontal"
-            android:layout_marginTop="6dp">
-
-            <Button
-                android:id="@+id/btn_refresh"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1"
-                android:layout_marginEnd="2dp"
-                android:layout_marginRight="2dp"
-                android:background="#0E639C"
-                android:text="@string/refresh"
-                android:textColor="#FFFFFF"
-                android:textSize="12sp" />
-
-            <Button
-                android:id="@+id/btn_source"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1"
-                android:layout_marginLeft="2dp"
-                android:layout_marginStart="2dp"
-                android:layout_marginEnd="2dp"
-                android:layout_marginRight="2dp"
-                android:background="#0E639C"
-                android:text="@string/switch_source"
-                android:textColor="#FFFFFF"
-                android:textSize="12sp" />
-
-            <Button
-                android:id="@+id/btn_fav"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1"
-                android:layout_marginLeft="2dp"
-                android:layout_marginStart="2dp"
-                android:layout_marginEnd="2dp"
-                android:layout_marginRight="2dp"
-                android:background="#0E639C"
-                android:text="@string/favorites"
-                android:textColor="#FFFFFF"
-                android:textSize="12sp" />
-
-            <Button
-                android:id="@+id/btn_dedup"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1"
-                android:layout_marginLeft="2dp"
-                android:layout_marginStart="2dp"
-                android:background="#8E44AD"
-                android:text="@string/dedup"
-                android:textColor="#FFFFFF"
-                android:textSize="12sp" />
-        </LinearLayout>
 
         <TextView
             android:id="@+id/status"

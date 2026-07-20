@@ -1,7 +1,10 @@
 package org.tvplayer.app;
 
+import android.app.AlertDialog;
 import android.content.Context;
 import android.content.pm.ActivityInfo;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
@@ -9,8 +12,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
-import android.text.Editable;
-import android.text.TextWatcher;
+import android.text.InputType;
+import android.view.KeyEvent;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.View;
@@ -18,14 +21,20 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.view.inputmethod.InputMethodManager;
 
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import android.widget.ArrayAdapter;
+
+import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.ExoPlayer;
 import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.Player;
@@ -37,63 +46,61 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String[][] SOURCES = {
-            {"best-fan", "https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_all.m3u8"},
-            {"TVBox", "https://ghfast.top/raw.githubusercontent.com/Supprise0901/TVBox_live/main/live.txt"},
-            {"vbskycn", "https://raw.githubusercontent.com/vbskycn/iptv/master/tv/tv.m3u"},
-            {"fanmingming", "https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv6.m3u"},
+    private static final String DEFAULT_SOURCE_URL = "https://raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8";
+    private static final String[] DEFAULT_MIRRORS = {
+            DEFAULT_SOURCE_URL,
+            "https://ghfast.top/raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
+            "https://raw.gitmirror.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
+            "https://raw.kkgithub.com/best-fan/iptv-sources/master/cn_all_status.m3u8"
     };
-
-    private static final String[] MIRRORS = {
-            "https://ghfast.top/raw.githubusercontent.com/",
-            "https://raw.gitmirror.com/",
-            "https://raw.kkgithub.com/",
-    };
+    private static final long CHANNEL_OSD_MS = 2500L;
+    private static final long CHANNEL_SWITCH_TIMEOUT_MS = 7000L;
+    private static final long STALL_TIMEOUT_MS = 7000L;
+    private static final long NETWORK_WAIT_RETRY_MS = 1000L;
 
     private PlayerView playerView;
     private ExoPlayer player;
     private View leftPanel;
     private Button btnTogglePanel;
     private Button btnLock;
-    private Button btnRefresh;
-    private Button btnSource;
-    private Button btnFav;
-    private Button btnDedup;
-    private EditText search;
     private TextView status;
     private TextView channelLabel;
     private TextView indicator;
     private RecyclerView channelList;
 
-    private ChannelAdapter adapter;
-    private StorageHelper storage;
-    private AudioManager audioManager;
-
-    private final List<Channel> allChannels = new ArrayList<>();
-    private final List<Channel> filtered = new ArrayList<>();
-    private int currentIndex = 0;
-    private int sourceIndex = 0;
-    private boolean panelVisible = true;
-    private boolean locked = false;
-    private boolean showFavOnly = false;
-    private boolean loading = false;
-    private String currentUrl = null;
-
-    private float brightness = 0.5f;
+    private final List<Channel> channels = new ArrayList<>();
+    private final List<String> sourceUrls = new ArrayList<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService netPool = Executors.newFixedThreadPool(2);
+
+    private ChannelAdapter adapter;
+    private AudioManager audioManager;
+    private StorageHelper storage;
     private GestureDetector gestureDetector;
     private Runnable hideIndicatorRunnable;
+    private Runnable hideChannelLabelRunnable;
+    private Runnable stallRunnable;
+    private Runnable silentAudioRunnable;
+
+    private int currentIndex = 0;
+    private int currentSourceIndex = 0;
+    private boolean panelVisible = true;
+    private boolean locked = false;
+    private boolean loading = false;
+    private boolean waitingForReady = false;
+    private float brightness = 0.5f;
+    private int playbackToken = 0;
+    private String activeSourceUrl = DEFAULT_SOURCE_URL;
+    private boolean autoSwitchingSource = false;
+    private boolean currentPlaybackReachedReady = false;
+    private long pendingStallTimeoutMs = CHANNEL_SWITCH_TIMEOUT_MS;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -113,9 +120,9 @@ public class MainActivity extends AppCompatActivity {
         }
 
         setContentView(R.layout.activity_main);
-
+        audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
         storage = new StorageHelper(this);
-        audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        restoreSourceState();
 
         bindViews();
         setupPlayer();
@@ -123,7 +130,7 @@ public class MainActivity extends AppCompatActivity {
         setupGestures();
         setupButtons();
         loadBrightness();
-        loadCacheOrRefresh();
+        loadChannels();
     }
 
     private void bindViews() {
@@ -131,11 +138,6 @@ public class MainActivity extends AppCompatActivity {
         leftPanel = findViewById(R.id.left_panel);
         btnTogglePanel = findViewById(R.id.btn_toggle_panel);
         btnLock = findViewById(R.id.btn_lock);
-        btnRefresh = findViewById(R.id.btn_refresh);
-        btnSource = findViewById(R.id.btn_source);
-        btnFav = findViewById(R.id.btn_fav);
-        btnDedup = findViewById(R.id.btn_dedup);
-        search = findViewById(R.id.search);
         status = findViewById(R.id.status);
         channelLabel = findViewById(R.id.channel_label);
         indicator = findViewById(R.id.indicator);
@@ -143,6 +145,8 @@ public class MainActivity extends AppCompatActivity {
 
         playerView.setUseController(false);
         playerView.setKeepContentOnPlayerReset(true);
+        channelLabel.setVisibility(View.GONE);
+        status.setVisibility(View.VISIBLE);
     }
 
     private void setupPlayer() {
@@ -151,22 +155,26 @@ public class MainActivity extends AppCompatActivity {
         player.addListener(new Player.Listener() {
             @Override
             public void onPlaybackStateChanged(int state) {
-                // no-op
+                if (state == Player.STATE_READY) {
+                    waitingForReady = false;
+                    autoSwitchingSource = false;
+                    currentPlaybackReachedReady = true;
+                    cancelStallCheck();
+                    scheduleSilentAudioCheck();
+                    return;
+                }
+                cancelSilentAudioCheck();
+                if (state == Player.STATE_BUFFERING || state == Player.STATE_IDLE || state == Player.STATE_ENDED) {
+                    scheduleStallCheck(currentPlaybackReachedReady ? STALL_TIMEOUT_MS : pendingStallTimeoutMs);
+                }
             }
 
             @Override
             public void onPlayerError(com.google.android.exoplayer2.PlaybackException error) {
-                runOnUiThread(() -> {
-                    if (filtered.isEmpty() || currentIndex < 0 || currentIndex >= filtered.size()) return;
-                    Channel bad = filtered.get(currentIndex);
-                    storage.hideChannel(bad.url);
-                    Toast.makeText(MainActivity.this,
-                            "已隐藏失效频道: " + bad.name, Toast.LENGTH_SHORT).show();
-                    applyFilter();
-                    if (!filtered.isEmpty()) {
-                        if (currentIndex >= filtered.size()) currentIndex = 0;
-                        playCurrent();
-                    }
+                mainHandler.post(() -> {
+                    waitingForReady = false;
+                    cancelStallCheck();
+                    switchToNextPlayableSource("当前线路播放失败，切换下一线路", true);
                 });
             }
         });
@@ -174,57 +182,31 @@ public class MainActivity extends AppCompatActivity {
 
     private void setupList() {
         adapter = new ChannelAdapter();
-        adapter.setStorage(storage);
         channelList.setLayoutManager(new LinearLayoutManager(this));
         channelList.setAdapter(adapter);
-        adapter.setOnChannelClick(pos -> {
-            if (locked) return;
-            currentIndex = pos;
-            playCurrent();
-        });
-        adapter.setOnChannelLongClick(pos -> {
-            if (locked) return;
-            Channel ch = adapter.getItem(pos);
-            if (ch == null) return;
-            storage.toggleFavorite(ch.url);
-            adapter.notifyItemChanged(pos);
-            Toast.makeText(this,
-                    storage.isFavorite(ch.url) ? "已收藏" : "已取消收藏",
-                    Toast.LENGTH_SHORT).show();
-        });
-        search.addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
-            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
-                applyFilter();
+        adapter.setOnChannelClick(position -> {
+            if (locked) {
+                return;
             }
-            @Override public void afterTextChanged(Editable s) {}
+            currentIndex = position;
+            currentSourceIndex = 0;
+            playCurrent(true);
         });
     }
 
     private void setupButtons() {
         btnTogglePanel.setOnClickListener(v -> {
-            if (locked) return;
-            togglePanel();
+            if (!locked) {
+                togglePanel();
+            }
+        });
+        btnTogglePanel.setOnLongClickListener(v -> {
+            if (!locked) {
+                showSourceInputDialog();
+            }
+            return true;
         });
         btnLock.setOnClickListener(v -> toggleLock());
-        btnRefresh.setOnClickListener(v -> {
-            if (locked) return;
-            refreshFromNetwork(true);
-        });
-        btnSource.setOnClickListener(v -> {
-            if (locked) return;
-            switchSource();
-        });
-        btnFav.setOnClickListener(v -> {
-            if (locked) return;
-            showFavOnly = !showFavOnly;
-            btnFav.setText(showFavOnly ? getString(R.string.all) : getString(R.string.favorites));
-            applyFilter();
-        });
-        btnDedup.setOnClickListener(v -> {
-            if (locked) return;
-            deduplicateChannels();
-        });
     }
 
     private void setupGestures() {
@@ -239,14 +221,16 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
-                if (locked || e1 == null || e2 == null) return false;
+                if (locked || e1 == null || e2 == null) {
+                    return false;
+                }
                 float dx = e2.getX() - e1.getX();
                 float dy = e2.getY() - e1.getY();
                 if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > SWIPE_MIN && Math.abs(velocityX) > SWIPE_VEL) {
                     if (dx > 0) {
-                        prevChannel();
+                        switchSource(-1, true);
                     } else {
-                        nextChannel();
+                        switchSource(1, true);
                     }
                     return true;
                 }
@@ -255,22 +239,20 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
-                if (locked || e1 == null || e2 == null) return false;
+                if (locked || e1 == null || e2 == null) {
+                    return false;
+                }
                 float dx = Math.abs(e2.getX() - e1.getX());
-                float dy = e1.getY() - e2.getY(); // up = positive
-                if (dx > Math.abs(dy)) return false;
-                if (Math.abs(dy) < 8) return false;
-
-                float x = e1.getX();
-                int w = playerView.getWidth();
-                if (w <= 0) w = getResources().getDisplayMetrics().widthPixels;
-
-                if (x < w * 0.35f) {
-                    // left side: brightness
+                float dy = e1.getY() - e2.getY();
+                if (dx > Math.abs(dy) || Math.abs(dy) < 8) {
+                    return false;
+                }
+                int width = playerView.getWidth() > 0 ? playerView.getWidth() : getResources().getDisplayMetrics().widthPixels;
+                if (e1.getX() < width * 0.35f) {
                     adjustBrightness(dy > 0 ? 0.03f : -0.03f);
                     return true;
-                } else if (x > w * 0.65f) {
-                    // right side: volume
+                }
+                if (e1.getX() > width * 0.65f) {
                     adjustVolume(dy > 0 ? 1 : -1);
                     return true;
                 }
@@ -279,7 +261,9 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public boolean onSingleTapConfirmed(MotionEvent e) {
-                if (locked) return true;
+                if (locked) {
+                    return true;
+                }
                 if (player != null) {
                     if (player.isPlaying()) {
                         player.pause();
@@ -295,7 +279,6 @@ public class MainActivity extends AppCompatActivity {
             if (panelVisible && isTouchOnPanel(event)) {
                 return false;
             }
-            // always allow lock button / toggle button
             return gestureDetector.onTouchEvent(event);
         };
         playerView.setOnTouchListener(touchListener);
@@ -303,7 +286,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private boolean isTouchOnPanel(MotionEvent event) {
-        if (leftPanel.getVisibility() != View.VISIBLE) return false;
+        if (leftPanel.getVisibility() != View.VISIBLE) {
+            return false;
+        }
         int[] loc = new int[2];
         leftPanel.getLocationOnScreen(loc);
         float x = event.getRawX();
@@ -335,7 +320,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void adjustVolume(int direction) {
-        if (audioManager == null) return;
+        if (audioManager == null) {
+            return;
+        }
         int max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
         int cur = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
         int next = Math.max(0, Math.min(max, cur + direction));
@@ -352,6 +339,24 @@ public class MainActivity extends AppCompatActivity {
         }
         hideIndicatorRunnable = () -> indicator.setVisibility(View.GONE);
         mainHandler.postDelayed(hideIndicatorRunnable, 1200);
+    }
+
+    private void showChannelOsd() {
+        if (channels.isEmpty() || currentIndex < 0 || currentIndex >= channels.size()) {
+            return;
+        }
+        Channel channel = channels.get(currentIndex);
+        String text = (currentIndex + 1) + "/" + channels.size() + " " + channel.name;
+        if (channel.getSourceCount() > 1) {
+            text += " 线路 " + (currentSourceIndex + 1) + "/" + channel.getSourceCount();
+        }
+        channelLabel.setText(text);
+        channelLabel.setVisibility(View.VISIBLE);
+        if (hideChannelLabelRunnable != null) {
+            mainHandler.removeCallbacks(hideChannelLabelRunnable);
+        }
+        hideChannelLabelRunnable = () -> channelLabel.setVisibility(View.GONE);
+        mainHandler.postDelayed(hideChannelLabelRunnable, CHANNEL_OSD_MS);
     }
 
     private void togglePanel() {
@@ -372,89 +377,251 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void loadCacheOrRefresh() {
-        List<Channel> cached = storage.loadChannels();
-        if (!cached.isEmpty()) {
-            allChannels.clear();
-            allChannels.addAll(cached);
-            applyFilter();
-            if (!filtered.isEmpty()) {
-                currentIndex = 0;
-                playCurrent();
-            }
-            deduplicateChannels();
-        } else {
-            refreshFromNetwork(true);
+    private void loadChannels() {
+        if (loading) {
+            return;
         }
-    }
-
-    private void refreshFromNetwork(boolean allSources) {
-        if (loading) return;
         loading = true;
+        waitingForReady = false;
+        cancelStallCheck();
+        status.setText(getString(R.string.loading));
         netPool.execute(() -> {
-            List<Channel> loaded = new ArrayList<>();
-            Set<String> seen = new HashSet<>();
-            if (allSources) {
-                for (String[] src : SOURCES) {
-                    List<Channel> part = fetchOneSource(src[1]);
-                    for (Channel c : part) {
-                        if (seen.add(c.url)) {
-                            loaded.add(c);
-                        }
-                    }
-                }
-            } else {
-                String url = SOURCES[sourceIndex][1];
-                List<Channel> part = fetchOneSource(url);
-                for (Channel c : part) {
-                    if (seen.add(c.url)) {
-                        loaded.add(c);
-                    }
-                }
-            }
+            List<Channel> loaded = fetchChannels();
             mainHandler.post(() -> {
                 loading = false;
-                if (!loaded.isEmpty()) {
-                    allChannels.clear();
-                    allChannels.addAll(loaded);
-                    storage.saveChannels(allChannels);
-                    applyFilter();
-                    if (!filtered.isEmpty()) {
-                        currentIndex = 0;
-                        playCurrent();
-                    }
-                    deduplicateChannels();
+                channels.clear();
+                channels.addAll(applyChannelLineRules(loaded));
+                adapter.setData(channels);
+                if (channels.isEmpty()) {
+                    status.setText(getString(R.string.load_failed));
+                    Toast.makeText(this, getString(R.string.load_failed), Toast.LENGTH_SHORT).show();
+                    return;
                 }
+                status.setText("已加载 " + channels.size() + " 个频道");
+                currentIndex = 0;
+                currentSourceIndex = 0;
+                playCurrent(false, CHANNEL_SWITCH_TIMEOUT_MS);
             });
         });
     }
 
-    private void switchSource() {
-        sourceIndex = (sourceIndex + 1) % SOURCES.length;
-        refreshFromNetwork(false);
-    }
-
-    private List<Channel> fetchOneSource(String url) {
-        List<String> candidates = new ArrayList<>();
-        candidates.add(url);
-        if (url.contains("raw.githubusercontent.com")) {
-            for (String prefix : MIRRORS) {
-                candidates.add(url.replace("https://raw.githubusercontent.com/", prefix));
-            }
-        }
-        for (String u : candidates) {
+    private List<Channel> fetchChannels() {
+        for (String url : buildSourceCandidates()) {
             try {
-                String body = httpGet(u);
+                String body = httpGet(url);
                 if (body != null && !body.isEmpty()) {
-                    List<Channel> list = M3UParser.parse(body);
-                    if (!list.isEmpty()) {
-                        return list;
+                    List<Channel> parsed = M3UParser.parse(body);
+                    if (!parsed.isEmpty()) {
+                        return parsed;
                     }
                 }
             } catch (Exception ignored) {
             }
         }
         return new ArrayList<>();
+    }
+
+    private List<String> buildSourceCandidates() {
+        List<String> urls = new ArrayList<>();
+        urls.add(activeSourceUrl);
+        if (DEFAULT_SOURCE_URL.equals(activeSourceUrl)) {
+            for (String mirror : DEFAULT_MIRRORS) {
+                if (!urls.contains(mirror)) {
+                    urls.add(mirror);
+                }
+            }
+        }
+        return urls;
+    }
+
+    private void showSourceInputDialog() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        int pad = dp(16);
+        root.setPadding(pad, pad, pad, pad);
+
+        EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        input.setHint("输入新的 m3u 或 m3u8 地址");
+        root.addView(input, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        root.addView(actions, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        Button addButton = new Button(this);
+        addButton.setText("添加");
+        actions.addView(addButton, new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f));
+
+        Button deleteButton = new Button(this);
+        deleteButton.setText("删除");
+        actions.addView(deleteButton, new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f));
+
+        ListView listView = new ListView(this);
+        LinearLayout.LayoutParams listParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(260));
+        root.addView(listView, listParams);
+
+        List<String> dialogSources = new ArrayList<>(sourceUrls);
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_single_choice, dialogSources);
+        listView.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
+        listView.setAdapter(adapter);
+        int checked = dialogSources.indexOf(activeSourceUrl);
+        if (checked >= 0) {
+            listView.setItemChecked(checked, true);
+        }
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("选择直播源")
+                .setView(root)
+                .setNegativeButton("关闭", null)
+                .create();
+
+        final int[] selectedIndex = {checked};
+
+        addButton.setOnClickListener(v -> {
+            String url = input.getText().toString().trim();
+            if (url.isEmpty()) {
+                showIndicator("源地址不能为空");
+                return;
+            }
+            if (!dialogSources.contains(url)) {
+                dialogSources.add(url);
+                sourceUrls.clear();
+                sourceUrls.addAll(dialogSources);
+                persistSourceState();
+                adapter.notifyDataSetChanged();
+            }
+            int idx = dialogSources.indexOf(url);
+            if (idx >= 0) {
+                selectedIndex[0] = idx;
+                listView.setItemChecked(idx, true);
+            }
+            input.setText("");
+            selectSource(url);
+        });
+
+        deleteButton.setOnClickListener(v -> {
+            int idx = listView.getCheckedItemPosition();
+            if (idx == ListView.INVALID_POSITION && selectedIndex[0] >= 0 && selectedIndex[0] < dialogSources.size()) {
+                idx = selectedIndex[0];
+            }
+            if (idx < 0 || idx >= dialogSources.size()) {
+                showIndicator("请先选择要删除的源");
+                return;
+            }
+            String target = dialogSources.get(idx);
+            if (DEFAULT_SOURCE_URL.equals(target)) {
+                showIndicator("默认源不能删除");
+                return;
+            }
+            dialogSources.remove(idx);
+            sourceUrls.clear();
+            sourceUrls.add(DEFAULT_SOURCE_URL);
+            sourceUrls.addAll(dialogSources);
+            if (target.equals(activeSourceUrl)) {
+                activeSourceUrl = DEFAULT_SOURCE_URL;
+                persistSourceState();
+                adapter.notifyDataSetChanged();
+                dialog.dismiss();
+                reloadActiveSource();
+                return;
+            }
+            persistSourceState();
+            adapter.notifyDataSetChanged();
+            selectedIndex[0] = dialogSources.indexOf(activeSourceUrl);
+            listView.clearChoices();
+            if (selectedIndex[0] >= 0) {
+                listView.setItemChecked(selectedIndex[0], true);
+            }
+        });
+
+        listView.setOnItemClickListener((parent, view, position, id) -> {
+            selectedIndex[0] = position;
+            String selectedUrl = dialogSources.get(position);
+            selectSource(selectedUrl);
+            dialog.dismiss();
+        });
+
+        dialog.show();
+        input.requestFocus();
+        input.post(() -> {
+            InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (imm != null) {
+                imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT);
+            }
+        });
+    }
+
+    private void selectSource(String url) {
+        String clean = url == null ? "" : url.trim();
+        if (clean.isEmpty()) {
+            showIndicator("源地址不能为空");
+            return;
+        }
+        if (clean.equals(activeSourceUrl)) {
+            return;
+        }
+        activeSourceUrl = clean;
+        persistSourceState();
+        reloadActiveSource();
+    }
+
+    private void reloadActiveSource() {
+        channels.clear();
+        adapter.setData(channels);
+        currentIndex = 0;
+        currentSourceIndex = 0;
+        if (player != null) {
+            player.stop();
+            player.clearMediaItems();
+        }
+        status.setText("正在切换源...");
+        loadChannels();
+    }
+
+    private void restoreSourceState() {
+        LinkedHashSet<String> urls = new LinkedHashSet<>();
+        urls.add(DEFAULT_SOURCE_URL);
+        urls.addAll(storage.loadSourceUrls());
+        String legacy = storage.loadCustomSourceUrl();
+        if (legacy != null && !legacy.trim().isEmpty()) {
+            urls.add(legacy.trim());
+        }
+        sourceUrls.clear();
+        sourceUrls.addAll(urls);
+        String selected = storage.loadSelectedSourceUrl();
+        if (selected != null && !selected.trim().isEmpty()) {
+            activeSourceUrl = selected.trim();
+            if (!sourceUrls.contains(activeSourceUrl)) {
+                sourceUrls.add(activeSourceUrl);
+            }
+        } else {
+            activeSourceUrl = DEFAULT_SOURCE_URL;
+        }
+        persistSourceState();
+    }
+
+    private void persistSourceState() {
+        storage.saveSourceUrls(sourceUrls);
+        storage.saveSelectedSourceUrl(activeSourceUrl);
+        storage.saveCustomSourceUrl(activeSourceUrl);
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
     private String httpGet(String urlStr) throws Exception {
@@ -480,177 +647,98 @@ public class MainActivity extends AppCompatActivity {
         return sb.toString();
     }
 
-    private void applyFilter() {
-        String kw = search.getText() != null ? search.getText().toString().trim().toLowerCase() : "";
-        filtered.clear();
-        for (Channel ch : allChannels) {
-            if (storage.isHidden(ch.url)) continue;
-            if (showFavOnly && !storage.isFavorite(ch.url)) continue;
-            if (!kw.isEmpty() && !ch.name.toLowerCase().contains(kw)) continue;
-            filtered.add(ch);
-        }
-        adapter.setData(filtered);
-        if (currentIndex >= filtered.size()) {
-            currentIndex = 0;
-        }
-        adapter.setSelected(currentIndex);
-    }
-
-    private String normalizeName(String name) {
-        if (name == null) return "";
-        String n = name.replaceAll("[\\s\\-—_·.．,，、/\\\\|()（）\\[\\]【】]", "").toLowerCase();
-        n = n.replaceAll("(fhd|uhd|hd|sd|4k|8k|1080p|720p|576p|高清|超清|标清|蓝光|流畅|备用[\\d]*|线路[\\d]+|源[\\d]+|直播|在线|综合|频道)$", "");
-        n = n.replaceAll("(fhd|uhd|hd|sd)$", "");
-        return n;
-    }
-
-    private void deduplicateChannels() {
-        if (allChannels.isEmpty()) return;
-        Toast.makeText(this, "筛选中...", Toast.LENGTH_SHORT).show();
-        netPool.execute(() -> {
-            Map<String, List<Channel>> groups = new LinkedHashMap<>();
-            for (Channel ch : allChannels) {
-                String key = normalizeName(ch.name);
-                if (!groups.containsKey(key)) {
-                    groups.put(key, new ArrayList<>());
-                }
-                groups.get(key).add(ch);
-            }
-
-            Set<String> toHide = new HashSet<>();
-            int kept = 0;
-            for (Map.Entry<String, List<Channel>> entry : groups.entrySet()) {
-                List<Channel> group = entry.getValue();
-                if (group.size() <= 1) {
-                    if (isPlayable(group.get(0))) {
-                        kept++;
-                    } else {
-                        toHide.add(group.get(0).url);
-                    }
-                    continue;
-                }
-                Channel best = testBestChannel(group);
-                if (best != null) {
-                    kept++;
-                    for (Channel ch : group) {
-                        if (!ch.url.equals(best.url)) {
-                            toHide.add(ch.url);
-                        }
-                    }
-                } else {
-                    for (Channel ch : group) {
-                        toHide.add(ch.url);
-                    }
-                }
-            }
-
-            Set<String> hidden = storage.loadHidden();
-            hidden.addAll(toHide);
-            storage.saveHidden(hidden);
-
-            final int hiddenCount = toHide.size();
-            final int keptCount = kept;
-            mainHandler.post(() -> {
-                applyFilter();
-                Toast.makeText(MainActivity.this, "筛选完成: 保留 " + keptCount + " 个, 隐藏 " + hiddenCount + " 个", Toast.LENGTH_LONG).show();
-                if (!filtered.isEmpty()) {
-                    currentIndex = 0;
-                    playCurrent();
-                }
-            });
-        });
-    }
-
-    private boolean isPlayable(Channel ch) {
-        try {
-            HttpURLConnection conn = (HttpURLConnection) new URL(ch.url).openConnection();
-            conn.setConnectTimeout(3000);
-            conn.setReadTimeout(3000);
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
-            conn.setInstanceFollowRedirects(true);
-            int code = conn.getResponseCode();
-            if (code >= 200 && code < 400) {
-                InputStream is = conn.getInputStream();
-                byte[] buf = new byte[4096];
-                int n = is.read(buf);
-                is.close();
-                conn.disconnect();
-                return n > 0;
-            }
-            conn.disconnect();
-        } catch (Exception ignored) {
-        }
-        return false;
-    }
-
-    private Channel testBestChannel(List<Channel> group) {
-        Channel best = null;
-        long bestTime = Long.MAX_VALUE;
-        for (Channel ch : group) {
-            try {
-                long start = System.currentTimeMillis();
-                HttpURLConnection conn = (HttpURLConnection) new URL(ch.url).openConnection();
-                conn.setConnectTimeout(4000);
-                conn.setReadTimeout(4000);
-                conn.setRequestProperty("User-Agent", "Mozilla/5.0");
-                conn.setInstanceFollowRedirects(true);
-                int code = conn.getResponseCode();
-                if (code >= 200 && code < 400) {
-                    InputStream is = conn.getInputStream();
-                    byte[] buf = new byte[8192];
-                    int total = 0;
-                    long deadline = System.currentTimeMillis() + 3000;
-                    while (System.currentTimeMillis() < deadline) {
-                        int n = is.read(buf);
-                        if (n <= 0) break;
-                        total += n;
-                        if (total >= 65536) break;
-                    }
-                    is.close();
-                    long elapsed = System.currentTimeMillis() - start;
-                    if (total > 0 && elapsed < bestTime) {
-                        bestTime = elapsed;
-                        best = ch;
-                    }
-                }
-                conn.disconnect();
-            } catch (Exception ignored) {
-            }
-        }
-        return best;
-    }
-
-    private void nextChannel() {
-        if (filtered.isEmpty()) return;
-        currentIndex = (currentIndex + 1) % filtered.size();
-        playCurrent();
-    }
-
-    private void prevChannel() {
-        if (filtered.isEmpty()) return;
-        currentIndex = (currentIndex - 1 + filtered.size()) % filtered.size();
-        playCurrent();
-    }
-
-    private void playCurrent() {
-        if (filtered.isEmpty() || currentIndex < 0 || currentIndex >= filtered.size()) {
+    private void scheduleStallCheck(long timeoutMs) {
+        if (!waitingForReady || channels.isEmpty()) {
             return;
         }
-        Channel ch = filtered.get(currentIndex);
+        cancelStallCheck();
+        final int token = playbackToken;
+        if (!hasNetworkConnection()) {
+            stallRunnable = () -> {
+                if (token == playbackToken && waitingForReady) {
+                    scheduleStallCheck(timeoutMs);
+                }
+            };
+            mainHandler.postDelayed(stallRunnable, NETWORK_WAIT_RETRY_MS);
+            return;
+        }
+        stallRunnable = () -> {
+            if (token == playbackToken && waitingForReady) {
+                waitingForReady = false;
+                switchToNextPlayableSource("当前线路加载超时，切换下一线路", true);
+            }
+        };
+        mainHandler.postDelayed(stallRunnable, timeoutMs);
+    }
+
+    private void scheduleSilentAudioCheck() {
+        cancelSilentAudioCheck();
+        if (channels.isEmpty() || currentIndex < 0 || currentIndex >= channels.size()) {
+            return;
+        }
+        final int token = playbackToken;
+        silentAudioRunnable = () -> {
+            if (token != playbackToken) {
+                return;
+            }
+            if (player == null || player.getPlaybackState() != Player.STATE_READY) {
+                return;
+            }
+            if (hasAudioTrack()) {
+                return;
+            }
+            switchToNextPlayableSource("当前线路无声音，切换下一线路", true);
+        };
+        mainHandler.postDelayed(silentAudioRunnable, STALL_TIMEOUT_MS);
+    }
+
+    private void cancelStallCheck() {
+        if (stallRunnable != null) {
+            mainHandler.removeCallbacks(stallRunnable);
+            stallRunnable = null;
+        }
+    }
+
+    private void cancelSilentAudioCheck() {
+        if (silentAudioRunnable != null) {
+            mainHandler.removeCallbacks(silentAudioRunnable);
+            silentAudioRunnable = null;
+        }
+    }
+
+    private void playCurrent(boolean showOsd, long timeoutMs) {
+        if (channels.isEmpty() || currentIndex < 0 || currentIndex >= channels.size()) {
+            return;
+        }
+        Channel channel = channels.get(currentIndex);
+        if (currentSourceIndex < 0 || currentSourceIndex >= channel.getSourceCount()) {
+            currentSourceIndex = 0;
+        }
+        String url = channel.getUrls().isEmpty() ? "" : channel.getUrls().get(currentSourceIndex);
+        if (url == null || url.isEmpty()) {
+            waitingForReady = false;
+            showIndicator("当前频道地址无效");
+            return;
+        }
+
         adapter.setSelected(currentIndex);
-        channelLabel.setText((currentIndex + 1) + "/" + filtered.size() + " " + ch.name);
         channelList.scrollToPosition(currentIndex);
+        playbackToken++;
+        waitingForReady = true;
+        autoSwitchingSource = false;
+        currentPlaybackReachedReady = false;
+        pendingStallTimeoutMs = timeoutMs;
+        cancelSilentAudioCheck();
+        scheduleStallCheck(timeoutMs);
 
-        if (ch.url.equals(currentUrl)) {
-            return;
-        }
-        currentUrl = ch.url;
         try {
-            MediaItem item = MediaItem.fromUri(Uri.parse(ch.url));
-            player.setMediaItem(item);
+            player.setMediaItem(MediaItem.fromUri(Uri.parse(url)));
             player.prepare();
             player.play();
-            if (panelVisible && !locked) {
+            if (showOsd) {
+                showChannelOsd();
+            }
+            if (panelVisible && !locked && showOsd) {
                 mainHandler.postDelayed(() -> {
                     if (panelVisible && !locked) {
                         togglePanel();
@@ -658,8 +746,150 @@ public class MainActivity extends AppCompatActivity {
                 }, 300);
             }
         } catch (Exception e) {
-            Toast.makeText(this, "播放失败: " + ch.name, Toast.LENGTH_SHORT).show();
+            waitingForReady = false;
+            cancelStallCheck();
+            switchToNextPlayableSource("当前线路播放失败，切换下一线路", true);
         }
+    }
+
+    private void playCurrent(boolean showOsd) {
+        playCurrent(showOsd, CHANNEL_SWITCH_TIMEOUT_MS);
+    }
+
+    private void playNextChannel(boolean showOsd) {
+        if (channels.isEmpty()) {
+            return;
+        }
+        currentIndex = (currentIndex + 1) % channels.size();
+        currentSourceIndex = 0;
+        playCurrent(showOsd, CHANNEL_SWITCH_TIMEOUT_MS);
+    }
+
+    private void playPreviousChannel(boolean showOsd) {
+        if (channels.isEmpty()) {
+            return;
+        }
+        currentIndex = (currentIndex - 1 + channels.size()) % channels.size();
+        currentSourceIndex = 0;
+        playCurrent(showOsd, CHANNEL_SWITCH_TIMEOUT_MS);
+    }
+
+    private void switchSource(int direction, boolean showOsd) {
+        if (channels.isEmpty() || currentIndex < 0 || currentIndex >= channels.size()) {
+            return;
+        }
+        Channel channel = channels.get(currentIndex);
+        if (channel.getSourceCount() <= 1) {
+            showIndicator("当前频道只有一个来源");
+            if (showOsd) {
+                showChannelOsd();
+            }
+            return;
+        }
+        int count = channel.getSourceCount();
+        currentSourceIndex = (currentSourceIndex + direction + count) % count;
+        playCurrent(showOsd, STALL_TIMEOUT_MS);
+    }
+
+    private void switchToNextPlayableSource(String hint, boolean showOsd) {
+        if (channels.isEmpty() || currentIndex < 0 || currentIndex >= channels.size()) {
+            showIndicator(hint);
+            return;
+        }
+        Channel channel = channels.get(currentIndex);
+        int count = channel.getSourceCount();
+        if (count <= 1) {
+            autoSwitchingSource = false;
+            showIndicator(hint);
+            return;
+        }
+        if (autoSwitchingSource) {
+            return;
+        }
+        autoSwitchingSource = true;
+        cancelSilentAudioCheck();
+        int original = currentSourceIndex;
+        int next = (currentSourceIndex + 1) % count;
+        if (next == original) {
+            autoSwitchingSource = false;
+            showIndicator(hint);
+            return;
+        }
+        currentSourceIndex = next;
+        showIndicator(hint);
+        playCurrent(showOsd, STALL_TIMEOUT_MS);
+    }
+
+    private boolean hasAudioTrack() {
+        return player != null && player.getCurrentTracks().isTypeSelected(C.TRACK_TYPE_AUDIO);
+    }
+
+    private List<Channel> applyChannelLineRules(List<Channel> input) {
+        List<Channel> output = new ArrayList<>();
+        for (Channel source : input) {
+            if (source == null) {
+                continue;
+            }
+            Channel filtered = new Channel(source.name, source.group, source.key, null);
+            List<String> urls = source.getUrls();
+            for (int i = 0; i < urls.size(); i++) {
+                if (shouldSkipChannelLine(source.key, i)) {
+                    continue;
+                }
+                filtered.addUrl(urls.get(i));
+            }
+            if (filtered.getSourceCount() > 0) {
+                output.add(filtered);
+            }
+        }
+        return output;
+    }
+
+    private boolean shouldSkipChannelLine(String key, int index) {
+        if ("cctv10".equals(key)) {
+            return index == 0;
+        }
+        if ("cctv13".equals(key)) {
+            return index >= 0 && index <= 2;
+        }
+        return false;
+    }
+
+    private boolean hasNetworkConnection() {
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (cm == null) {
+            return false;
+        }
+        try {
+            NetworkInfo info = cm.getActiveNetworkInfo();
+            return info != null && info.isConnected();
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (locked && keyCode != KeyEvent.KEYCODE_DPAD_CENTER && keyCode != KeyEvent.KEYCODE_ENTER) {
+            return super.onKeyDown(keyCode, event);
+        }
+        if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+            switchSource(-1, true);
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            switchSource(1, true);
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+            playPreviousChannel(true);
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+            playNextChannel(true);
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
     }
 
     @Override
@@ -672,6 +902,8 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onStop() {
+        cancelStallCheck();
+        cancelSilentAudioCheck();
         if (player != null) {
             player.setPlayWhenReady(false);
         }
@@ -680,6 +912,14 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        cancelStallCheck();
+        cancelSilentAudioCheck();
+        if (hideIndicatorRunnable != null) {
+            mainHandler.removeCallbacks(hideIndicatorRunnable);
+        }
+        if (hideChannelLabelRunnable != null) {
+            mainHandler.removeCallbacks(hideChannelLabelRunnable);
+        }
         if (player != null) {
             player.release();
             player = null;
