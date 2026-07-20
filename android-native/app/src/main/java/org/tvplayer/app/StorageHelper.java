@@ -20,6 +20,7 @@ public class StorageHelper {
     private static final String KEY_CUSTOM_SOURCE_URL = "custom_source_url";
     private static final String KEY_SOURCE_URLS = "source_urls";
     private static final String KEY_SELECTED_SOURCE_URL = "selected_source_url";
+    private static final String KEY_HIDDEN_LINES = "hidden_lines";
 
     private final SharedPreferences prefs;
 
@@ -233,5 +234,29 @@ public class StorageHelper {
             return selected.trim();
         }
         return loadCustomSourceUrl();
+    }
+
+    public Set<String> loadHiddenLines() {
+        return new HashSet<>(prefs.getStringSet(KEY_HIDDEN_LINES, new HashSet<String>()));
+    }
+
+    public void saveHiddenLines(Set<String> urls) {
+        prefs.edit().putStringSet(KEY_HIDDEN_LINES, new HashSet<>(urls)).apply();
+    }
+
+    public void hideLine(String url) {
+        if (url == null || url.trim().isEmpty()) {
+            return;
+        }
+        Set<String> hidden = loadHiddenLines();
+        hidden.add(url.trim());
+        saveHiddenLines(hidden);
+    }
+
+    public boolean isLineHidden(String url) {
+        if (url == null || url.trim().isEmpty()) {
+            return false;
+        }
+        return loadHiddenLines().contains(url.trim());
     }
 }

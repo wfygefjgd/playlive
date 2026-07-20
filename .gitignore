@@ -13,4 +13,6 @@ output.log
 err.log
 .buildozer/
 bin/
+android-native/.gradle/
+android-native/local.properties
 

@@ -64,6 +64,7 @@ public class MainActivity extends AppCompatActivity {
     private static final long CHANNEL_SWITCH_TIMEOUT_MS = 7000L;
     private static final long STALL_TIMEOUT_MS = 7000L;
     private static final long NETWORK_WAIT_RETRY_MS = 1000L;
+    private static final long FLOAT_BUTTONS_TIMEOUT_MS = 2500L;
 
     private PlayerView playerView;
     private ExoPlayer player;
@@ -88,10 +89,11 @@ public class MainActivity extends AppCompatActivity {
     private Runnable hideChannelLabelRunnable;
     private Runnable stallRunnable;
     private Runnable silentAudioRunnable;
+    private Runnable hideFloatingButtonsRunnable;
 
     private int currentIndex = 0;
     private int currentSourceIndex = 0;
-    private boolean panelVisible = true;
+    private boolean panelVisible = false;
     private boolean locked = false;
     private boolean loading = false;
     private boolean waitingForReady = false;
@@ -147,6 +149,9 @@ public class MainActivity extends AppCompatActivity {
         playerView.setKeepContentOnPlayerReset(true);
         channelLabel.setVisibility(View.GONE);
         status.setVisibility(View.VISIBLE);
+        setFloatingButtonsVisible(true);
+        leftPanel.setVisibility(View.GONE);
+        btnTogglePanel.setText("▶");
     }
 
     private void setupPlayer() {
@@ -161,6 +166,7 @@ public class MainActivity extends AppCompatActivity {
                     currentPlaybackReachedReady = true;
                     cancelStallCheck();
                     scheduleSilentAudioCheck();
+                    scheduleHideFloatingButtons();
                     return;
                 }
                 cancelSilentAudioCheck();
@@ -207,6 +213,12 @@ public class MainActivity extends AppCompatActivity {
             return true;
         });
         btnLock.setOnClickListener(v -> toggleLock());
+        btnLock.setOnLongClickListener(v -> {
+            if (!channels.isEmpty()) {
+                confirmDeleteCurrentLine();
+            }
+            return true;
+        });
     }
 
     private void setupGestures() {
@@ -262,8 +274,10 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public boolean onSingleTapConfirmed(MotionEvent e) {
                 if (locked) {
+                    showFloatingButtonsTemporarily();
                     return true;
                 }
+                showFloatingButtonsTemporarily();
                 if (player != null) {
                     if (player.isPlaying()) {
                         player.pause();
@@ -363,6 +377,7 @@ public class MainActivity extends AppCompatActivity {
         panelVisible = !panelVisible;
         leftPanel.setVisibility(panelVisible ? View.VISIBLE : View.GONE);
         btnTogglePanel.setText(panelVisible ? "◀" : "▶");
+        showFloatingButtonsTemporarily();
     }
 
     private void toggleLock() {
@@ -370,11 +385,101 @@ public class MainActivity extends AppCompatActivity {
         btnLock.setText(locked ? "🔒" : "🔓");
         if (locked) {
             leftPanel.setVisibility(View.GONE);
+            setFloatingButtonsVisible(true);
             btnTogglePanel.setVisibility(View.GONE);
         } else {
-            btnTogglePanel.setVisibility(View.VISIBLE);
             leftPanel.setVisibility(panelVisible ? View.VISIBLE : View.GONE);
+            showFloatingButtonsTemporarily();
         }
+    }
+
+    private void setFloatingButtonsVisible(boolean visible) {
+        float alpha = visible ? 1f : 0f;
+        int visibility = visible ? View.VISIBLE : View.GONE;
+        btnLock.setAlpha(alpha);
+        btnLock.setVisibility(visibility);
+        btnTogglePanel.setAlpha(alpha);
+        btnTogglePanel.setVisibility(locked ? View.GONE : visibility);
+    }
+
+    private void showFloatingButtonsTemporarily() {
+        cancelHideFloatingButtons();
+        setFloatingButtonsVisible(true);
+        scheduleHideFloatingButtons();
+    }
+
+    private void scheduleHideFloatingButtons() {
+        cancelHideFloatingButtons();
+        if (player == null || player.getPlaybackState() != Player.STATE_READY) {
+            return;
+        }
+        hideFloatingButtonsRunnable = () -> setFloatingButtonsVisible(false);
+        mainHandler.postDelayed(hideFloatingButtonsRunnable, FLOAT_BUTTONS_TIMEOUT_MS);
+    }
+
+    private void cancelHideFloatingButtons() {
+        if (hideFloatingButtonsRunnable != null) {
+            mainHandler.removeCallbacks(hideFloatingButtonsRunnable);
+            hideFloatingButtonsRunnable = null;
+        }
+    }
+
+    private void confirmDeleteCurrentLine() {
+        if (channels.isEmpty() || currentIndex < 0 || currentIndex >= channels.size()) {
+            return;
+        }
+        Channel channel = channels.get(currentIndex);
+        if (channel.getSourceCount() == 0 || currentSourceIndex < 0 || currentSourceIndex >= channel.getSourceCount()) {
+            return;
+        }
+        String lineLabel = channel.name + " 线路 " + (currentSourceIndex + 1);
+        new AlertDialog.Builder(this)
+                .setTitle("删除当前线路")
+                .setMessage("确认删除 " + lineLabel + " 并自动跳到下一线路吗？")
+                .setPositiveButton("删除", (dialog, which) -> deleteCurrentLineAndJump())
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void deleteCurrentLineAndJump() {
+        if (channels.isEmpty() || currentIndex < 0 || currentIndex >= channels.size()) {
+            return;
+        }
+        Channel channel = channels.get(currentIndex);
+        List<String> urls = channel.getUrls();
+        if (urls.isEmpty() || currentSourceIndex < 0 || currentSourceIndex >= urls.size()) {
+            return;
+        }
+        String currentUrl = urls.get(currentSourceIndex);
+        storage.hideLine(currentUrl);
+
+        int nextIndex = urls.size() <= 1 ? -1 : currentSourceIndex;
+        channels.clear();
+        channels.addAll(applyChannelLineRules(fetchChannels()));
+        adapter.setData(channels);
+
+        if (channels.isEmpty()) {
+            showIndicator("线路已删除");
+            return;
+        }
+
+        if (currentIndex >= channels.size()) {
+            currentIndex = channels.size() - 1;
+        }
+        Channel updated = channels.get(currentIndex);
+        if (updated.getSourceCount() <= 0) {
+            playNextChannel(true);
+            return;
+        }
+        if (nextIndex < 0) {
+            currentSourceIndex = 0;
+        } else if (nextIndex >= updated.getSourceCount()) {
+            currentSourceIndex = 0;
+        } else {
+            currentSourceIndex = nextIndex;
+        }
+        showIndicator("已删除当前线路");
+        playCurrent(true, STALL_TIMEOUT_MS);
     }
 
     private void loadChannels() {
@@ -589,6 +694,7 @@ public class MainActivity extends AppCompatActivity {
             player.clearMediaItems();
         }
         status.setText("正在切换源...");
+        setFloatingButtonsVisible(true);
         loadChannels();
     }
 
@@ -833,10 +939,14 @@ public class MainActivity extends AppCompatActivity {
             Channel filtered = new Channel(source.name, source.group, source.key, null);
             List<String> urls = source.getUrls();
             for (int i = 0; i < urls.size(); i++) {
-                if (shouldSkipChannelLine(source.key, i)) {
+                String url = urls.get(i);
+                if (storage.isLineHidden(url)) {
                     continue;
                 }
-                filtered.addUrl(urls.get(i));
+                if (shouldSkipChannelLine(source.key, i, url)) {
+                    continue;
+                }
+                filtered.addUrl(url);
             }
             if (filtered.getSourceCount() > 0) {
                 output.add(filtered);
@@ -845,12 +955,21 @@ public class MainActivity extends AppCompatActivity {
         return output;
     }
 
-    private boolean shouldSkipChannelLine(String key, int index) {
+    private boolean shouldSkipChannelLine(String key, int index, String url) {
         if ("cctv10".equals(key)) {
+            return index == 0;
+        }
+        if ("cctv14".equals(key)) {
             return index == 0;
         }
         if ("cctv13".equals(key)) {
             return index >= 0 && index <= 2;
+        }
+        if ("北京".equals(key)) {
+            return index == 0;
+        }
+        if ("湖南".equals(key)) {
+            return index >= 0 && index <= 1;
         }
         return false;
     }
@@ -904,6 +1023,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onStop() {
         cancelStallCheck();
         cancelSilentAudioCheck();
+        cancelHideFloatingButtons();
         if (player != null) {
             player.setPlayWhenReady(false);
         }
@@ -914,6 +1034,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         cancelStallCheck();
         cancelSilentAudioCheck();
+        cancelHideFloatingButtons();
         if (hideIndicatorRunnable != null) {
             mainHandler.removeCallbacks(hideIndicatorRunnable);
         }
