@@ -6,6 +6,10 @@ let DEFAULT_SOURCE_URL = "https://ghproxy.net/https://raw.githubusercontent.com/
 private let CHANNEL_OSD_MS: UInt64 = 2_500_000_000
 private let FLOAT_HIDE_MS: UInt64 = 2_500_000_000
 private let INDICATOR_MS: UInt64 = 1_200_000_000
+/// 自动切线冷却
+private let AUTO_SWITCH_COOLDOWN_NS: UInt64 = 4_000_000_000
+/// 自动切线冷却（方案 A）
+private let AUTO_SWITCH_COOLDOWN_NS: UInt64 = 4_000_000_000
 
 let PRESET_SOURCES: [(name: String, url: String)] = [
     ("默认源", DEFAULT_SOURCE_URL),
@@ -34,23 +38,30 @@ final class PlayerViewModel: ObservableObject {
     var sourceUrls: [String] = []
     var activeSourceUrl = DEFAULT_SOURCE_URL
     private var autoSwitching = false
+    private var autoSwitchCooldown = false
     private var started = false
+    /// 当前频道已自动试过的线路下标（一轮试完后停止）
+    private var triedLineIndices = Set<Int>()
     private var osdTask: Task<Void, Never>?
     private var indTask: Task<Void, Never>?
     private var floatTask: Task<Void, Never>?
+    private var cooldownTask: Task<Void, Never>?
 
     func startup() {
         guard !started else { return }
         started = true
 
-        player.onSlowNetwork = { [weak self] in
-            Task { @MainActor in self?.onSlowNetwork() }
-        }
         player.onReady = { [weak self] in
             Task { @MainActor in self?.onPlayerReady() }
         }
         player.onError = { [weak self] in
             Task { @MainActor in self?.onPlayerError() }
+        }
+        player.onStartupTimeout = { [weak self] in
+            Task { @MainActor in self?.onStartupTimeout() }
+        }
+        player.onPlaybackStall = { [weak self] in
+            Task { @MainActor in self?.onPlaybackStall() }
         }
 
         restoreSources()
@@ -201,11 +212,15 @@ final class PlayerViewModel: ObservableObject {
 
     // MARK: - Play
 
-    func playCurrent(showOSD: Bool = true) {
+    func playCurrent(showOSD: Bool = true, resetTried: Bool = false) {
         guard currentChannel != nil, let url = currentUrl, let u = URL(string: url) else {
             showIndicator("当前频道地址无效")
             return
         }
+        if resetTried {
+            triedLineIndices.removeAll()
+        }
+        triedLineIndices.insert(currentSourceIndex)
         autoSwitching = false
         player.play(url: u)
         if showOSD { showChannelOSD() }
@@ -221,12 +236,54 @@ final class PlayerViewModel: ObservableObject {
     }
 
     private func onPlayerError() {
-        // 不弹播放失败提示
+        autoSwitchLine(hint: "线路失败，切换下一线路")
     }
 
-    func onSlowNetwork() {
-        guard !autoSwitching else { return }
-        switchNextLine(hint: "网络缓慢，切换下一线路")
+    private func onStartupTimeout() {
+        autoSwitchLine(hint: "线路超时，切换下一线路")
+    }
+
+    private func onPlaybackStall() {
+        autoSwitchLine(hint: "网络卡顿，切换下一线路")
+    }
+
+    /// 方案 A：自动切线（冷却 + 同频道一轮试完即停）
+    private func autoSwitchLine(hint: String) {
+        guard !locked, !autoSwitching, !autoSwitchCooldown else { return }
+        guard let ch = currentChannel, ch.sourceCount > 1 else {
+            showIndicator(hint)
+            return
+        }
+        // 找尚未试过的下一线路
+        var nxt = (currentSourceIndex + 1) % ch.sourceCount
+        var scanned = 0
+        while triedLineIndices.contains(nxt), scanned < ch.sourceCount {
+            nxt = (nxt + 1) % ch.sourceCount
+            scanned += 1
+        }
+        if scanned >= ch.sourceCount || triedLineIndices.count >= ch.sourceCount {
+            autoSwitching = false
+            showIndicator("当前频道线路均不可用")
+            return
+        }
+        autoSwitching = true
+        autoSwitchCooldown = true
+        currentSourceIndex = nxt
+        showIndicator(hint)
+        playCurrent(showOSD: true, resetTried: false)
+        startCooldown()
+    }
+
+    private func startCooldown() {
+        cooldownTask?.cancel()
+        cooldownTask = Task {
+            try? await Task.sleep(nanoseconds: AUTO_SWITCH_COOLDOWN_NS)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                autoSwitchCooldown = false
+                autoSwitching = false
+            }
+        }
     }
 
     // MARK: - Navigation
@@ -236,7 +293,9 @@ final class PlayerViewModel: ObservableObject {
         currentIndex = (currentIndex + 1) % channels.count
         currentSourceIndex = 0
         panelVisible = false
-        playCurrent()
+        triedLineIndices.removeAll()
+        autoSwitchCooldown = false
+        playCurrent(resetTried: true)
     }
 
     func prevChannel() {
@@ -244,7 +303,9 @@ final class PlayerViewModel: ObservableObject {
         currentIndex = (currentIndex - 1 + channels.count) % channels.count
         currentSourceIndex = 0
         panelVisible = false
-        playCurrent()
+        triedLineIndices.removeAll()
+        autoSwitchCooldown = false
+        playCurrent(resetTried: true)
     }
 
     func switchSource(direction: Int) {
@@ -255,26 +316,15 @@ final class PlayerViewModel: ObservableObject {
             }
             return
         }
+        // 手动切线：重置已试集合与冷却
+        triedLineIndices.removeAll()
+        autoSwitchCooldown = false
         currentSourceIndex = (currentSourceIndex + direction + ch.sourceCount) % ch.sourceCount
-        playCurrent()
+        playCurrent(resetTried: true)
     }
 
     func switchNextLine(hint: String) {
-        guard let ch = currentChannel, ch.sourceCount > 1, !autoSwitching else {
-            autoSwitching = false
-            showIndicator(hint)
-            return
-        }
-        autoSwitching = true
-        let nxt = (currentSourceIndex + 1) % ch.sourceCount
-        guard nxt != currentSourceIndex else {
-            autoSwitching = false
-            showIndicator(hint)
-            return
-        }
-        currentSourceIndex = nxt
-        showIndicator(hint)
-        playCurrent()
+        autoSwitchLine(hint: hint)
     }
 
     // MARK: - OSD / Indicator

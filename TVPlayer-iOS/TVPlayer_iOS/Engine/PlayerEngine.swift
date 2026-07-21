@@ -1,69 +1,73 @@
 import AVKit
 import Combine
 
+/// 方案 A：起播超时 + 播放中连续卡顿 + 开播保护
 final class PlayerEngine: ObservableObject {
+    /// 起播超时（秒）
+    static let startupTimeoutNs: UInt64 = 10_000_000_000
+    /// 播放中连续卡顿阈值
+    static let stallTimeoutNs: UInt64 = 6_000_000_000
+    /// ready 后保护期，避免刚起播误切
+    static let readyProtectNs: UInt64 = 2_000_000_000
+
     let player = AVPlayer()
     private var cancellables = Set<AnyCancellable>()
     private var statusObserver: NSKeyValueObservation?
-    private var bufferObserver: NSKeyValueObservation?
     private var playToken = 0
-    private var bufferTask: Task<Void, Never>?
+    private var startupTask: Task<Void, Never>?
+    private var stallTask: Task<Void, Never>?
+    private var protectTask: Task<Void, Never>?
+    private var stallWatchEnabled = false
+    private var continuousStall = false
 
     @Published var isReady = false
     @Published var isPlaying = false
 
     var onError: (() -> Void)?
     var onReady: (() -> Void)?
-    var onSlowNetwork: (() -> Void)?
+    /// 起播超时（未 ready）
+    var onStartupTimeout: (() -> Void)?
+    /// 正常播放后连续卡顿
+    var onPlaybackStall: (() -> Void)?
 
     init() {
         player.actionAtItemEnd = .none
         player.automaticallyWaitsToMinimizeStalling = true
-        observeStatus()
+        observeTimeControl()
     }
 
     func play(url: URL) {
         pause()
         playToken += 1
         let token = playToken
+        cancelAllWatchers()
         statusObserver?.invalidate()
-        bufferObserver?.invalidate()
-        cancelBufferTask()
+        stallWatchEnabled = false
+        continuousStall = false
 
         let item = AVPlayerItem(url: url)
         player.replaceCurrentItem(with: item)
+        isReady = false
+        isPlaying = true
 
         statusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             guard let self else { return }
             if item.status == .readyToPlay {
                 DispatchQueue.main.async {
                     guard self.playToken == token else { return }
-                    self.isReady = true
-                    self.player.play()
-                    self.isPlaying = true
-                    self.onReady?()
+                    self.handleReady(token: token)
                 }
             } else if item.status == .failed {
                 DispatchQueue.main.async {
                     guard self.playToken == token else { return }
+                    self.cancelAllWatchers()
                     self.onError?()
                 }
             }
         }
 
-        bufferObserver = item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
-            DispatchQueue.main.async {
-                if !item.isPlaybackLikelyToKeepUp {
-                    self?.startBufferTask()
-                } else {
-                    self?.cancelBufferTask()
-                }
-            }
-        }
-
+        scheduleStartupTimeout(token: token)
         player.play()
-        isPlaying = true
-        isReady = false
     }
 
     func pause() {
@@ -78,14 +82,15 @@ final class PlayerEngine: ObservableObject {
     }
 
     func stop() {
+        playToken += 1
         statusObserver?.invalidate()
         statusObserver = nil
-        bufferObserver?.invalidate()
-        bufferObserver = nil
-        cancelBufferTask()
+        cancelAllWatchers()
         player.replaceCurrentItem(with: nil)
         isPlaying = false
         isReady = false
+        stallWatchEnabled = false
+        continuousStall = false
     }
 
     var volume: Float {
@@ -93,44 +98,117 @@ final class PlayerEngine: ObservableObject {
         set { player.volume = max(0, min(1, newValue)) }
     }
 
-    var isBufferingSlow: Bool {
-        guard let item = player.currentItem else { return true }
-        return !item.isPlaybackLikelyToKeepUp || item.isPlaybackBufferEmpty
-    }
+    // MARK: - Ready / startup
 
-    private func observeStatus() {
-        player.publisher(for: \.timeControlStatus)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] status in
-                self?.isPlaying = status == .playing
-            }
-            .store(in: &cancellables)
-    }
-
-    /// 卡顿 3s 后复查，仍慢再等 3s 确认后回调
-    private func startBufferTask() {
-        guard bufferTask == nil else { return }
-        bufferTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            guard !Task.isCancelled else { return }
-            let stillSlow = await MainActor.run { self?.isBufferingSlow ?? false }
-            guard stillSlow, !Task.isCancelled else {
-                await MainActor.run { self?.cancelBufferTask() }
-                return
-            }
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+    private func handleReady(token: Int) {
+        guard playToken == token else { return }
+        cancelStartup()
+        isReady = true
+        player.play()
+        isPlaying = true
+        onReady?()
+        // 开播保护后再允许卡顿检测
+        stallWatchEnabled = false
+        protectTask?.cancel()
+        protectTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.readyProtectNs)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                guard let self else { return }
-                defer { self.cancelBufferTask() }
-                guard self.isBufferingSlow else { return }
-                self.onSlowNetwork?()
+                guard let self, self.playToken == token else { return }
+                self.stallWatchEnabled = true
             }
         }
     }
 
-    private func cancelBufferTask() {
-        bufferTask?.cancel()
-        bufferTask = nil
+    private func scheduleStartupTimeout(token: Int) {
+        cancelStartup()
+        startupTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.startupTimeoutNs)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.playToken == token, !self.isReady else { return }
+                self.cancelAllWatchers()
+                self.onStartupTimeout?()
+            }
+        }
+    }
+
+    // MARK: - Stall (only after protect)
+
+    private func observeTimeControl() {
+        player.publisher(for: \.timeControlStatus)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] status in
+                guard let self else { return }
+                self.isPlaying = status == .playing
+                self.handleTimeControl(status)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func handleTimeControl(_ status: AVPlayer.TimeControlStatus) {
+        guard stallWatchEnabled, isReady else {
+            if status == .playing || status == .paused {
+                stopStallTimer()
+            }
+            return
+        }
+        switch status {
+        case .waitingToPlayAtSpecifiedRate:
+            beginStallTimerIfNeeded()
+        case .playing:
+            stopStallTimer()
+        case .paused:
+            stopStallTimer()
+        @unknown default:
+            break
+        }
+
+        // 缓冲空也视为卡顿信号
+        if let item = player.currentItem, item.isPlaybackBufferEmpty, status != .playing {
+            beginStallTimerIfNeeded()
+        }
+    }
+
+    private func beginStallTimerIfNeeded() {
+        guard continuousStall == false else { return }
+        continuousStall = true
+        let token = playToken
+        stallTask?.cancel()
+        stallTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.stallTimeoutNs)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.playToken == token, self.stallWatchEnabled else { return }
+                // 仍在 waiting 或 buffer 空
+                let waiting = self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                let empty = self.player.currentItem?.isPlaybackBufferEmpty == true
+                guard waiting || empty else {
+                    self.continuousStall = false
+                    return
+                }
+                self.continuousStall = false
+                self.stallTask = nil
+                self.onPlaybackStall?()
+            }
+        }
+    }
+
+    private func stopStallTimer() {
+        continuousStall = false
+        stallTask?.cancel()
+        stallTask = nil
+    }
+
+    private func cancelStartup() {
+        startupTask?.cancel()
+        startupTask = nil
+    }
+
+    private func cancelAllWatchers() {
+        cancelStartup()
+        stopStallTimer()
+        protectTask?.cancel()
+        protectTask = nil
     }
 }
