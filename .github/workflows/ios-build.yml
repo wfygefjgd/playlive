@@ -23,21 +23,28 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Build Archive
+      - name: Build Release
         run: |
           xcodebuild \
             -project TVPlayer.xcodeproj \
             -scheme TVPlayer_iOS \
-            -configuration Debug \
+            -configuration Release \
             -sdk iphoneos \
             -derivedDataPath "${{ github.workspace }}/Build" \
             CODE_SIGNING_ALLOWED="NO" \
             CODE_SIGN_IDENTITY="" \
             build
 
-      - name: Export .app as Artifact
+      - name: Package .ipa
+        run: |
+          mkdir -p "${{ github.workspace }}/Payload"
+          cp -R "${{ github.workspace }}/Build/Build/Products/Release-iphoneos/TVPlayer_iOS.app" "${{ github.workspace }}/Payload/"
+          cd "${{ github.workspace }}"
+          zip -r TVPlayer_iOS.ipa Payload/
+
+      - name: Upload .ipa
         uses: actions/upload-artifact@v4
         with:
-          name: TVPlayer-iOS-app
-          path: ${{ github.workspace }}/Build/Build/Products/Debug-iphoneos/*.app
+          name: TVPlayer-iOS-ipa
+          path: ${{ github.workspace }}/TVPlayer_iOS.ipa
           retention-days: 7
