@@ -1,16 +1,10 @@
 import SwiftUI
 import AVKit
 import MediaPlayer
+import Network
 
-let DEFAULT_SOURCE_URL = "https://ghproxy.net/https://raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8"
-
-let DEFAULT_MIRRORS = [
-    DEFAULT_SOURCE_URL,
-    "https://raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
-    "https://ghfast.top/raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
-    "https://ghp.ci/https://raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
-    "https://mirror.ghproxy.com/https://raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
-]
+let BASE_RAW = "https://raw.githubusercontent.com/best-fan/iptv-sources/master"
+let DEFAULT_SOURCE_URL = "\(BASE_RAW)/cn_all_status.m3u8"
 
 let CHANNEL_OSD_MS: UInt64 = 2_500_000_000
 let STALL_TIMEOUT_MS: UInt64 = 7_000_000_000
@@ -18,7 +12,7 @@ let FLOAT_HIDE_MS: UInt64 = 2_500_000_000
 
 let PRESET_SOURCES: [(name: String, url: String)] = [
     ("默认源", DEFAULT_SOURCE_URL),
-    ("best-fan 全量", "https://ghproxy.net/https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_all.m3u8"),
+    ("best-fan 全量", "\(BASE_RAW)/cn_all.m3u8"),
     ("TVBox", "https://ghfast.top/raw.githubusercontent.com/Supprise0901/TVBox_live/main/live.txt"),
     ("vbskycn", "https://raw.githubusercontent.com/vbskycn/iptv/master/tv/tv.m3u"),
     ("fanmingming", "https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv6.m3u"),
@@ -48,6 +42,7 @@ class PlayerViewModel: ObservableObject {
     private var indTask: Task<Void, Never>?
     private var stallTask: Task<Void, Never>?
     private var floatTask: Task<Void, Never>?
+    private var networkMonitor: NWPathMonitor?
 
     func startup() {
         player.onReady = { [weak self] in
@@ -61,7 +56,6 @@ class PlayerViewModel: ObservableObject {
             }
         }
         restoreSources()
-        // load cache first, then async refresh
         let cached = applyRules(storage.loadChannels())
         if !cached.isEmpty {
             channels = cached
@@ -69,7 +63,22 @@ class PlayerViewModel: ObservableObject {
             currentSourceIndex = 0
             playCurrent(showOSD: false, timeoutMs: STALL_TIMEOUT_MS)
         }
-        loadChannels(force: cached.isEmpty)
+        waitForNetworkThenLoad(force: cached.isEmpty)
+    }
+
+    private func waitForNetworkThenLoad(force: Bool) {
+        let monitor = NWPathMonitor()
+        self.networkMonitor = monitor
+        monitor.pathUpdateHandler = { [weak self] path in
+            if path.status == .satisfied {
+                monitor.cancel()
+                Task { @MainActor in
+                    self?.indicatorText = "加载中..."
+                    self?.loadChannels(force: true)
+                }
+            }
+        }
+        monitor.start(queue: DispatchQueue.global())
     }
 
     // MARK: - Sources
@@ -151,11 +160,7 @@ class PlayerViewModel: ObservableObject {
     }
 
     func buildCandidates() -> [String] {
-        var urls = [activeSourceUrl]
-        if activeSourceUrl == DEFAULT_SOURCE_URL || activeSourceUrl.contains("raw.githubusercontent.com") || activeSourceUrl.contains("ghproxy") {
-            for m in DEFAULT_MIRRORS where !urls.contains(m) { urls.append(m) }
-        }
-        return urls
+        [activeSourceUrl]
     }
 
     // MARK: - Rules

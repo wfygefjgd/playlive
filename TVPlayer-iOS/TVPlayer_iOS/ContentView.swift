@@ -64,10 +64,16 @@ struct ContentView: View {
             panelVisible: vm.panelVisible,
             locked: vm.locked,
             onTogglePanel: { vm.togglePanel() },
-            onLongPanel: { vm.showSourceSheet = true },
+            onLongPanel: { vm.switchNextLine(hint: "切换线路") },
             onToggleLock: { vm.toggleLock() },
             onLongLock: { vm.confirmDeleteLine() }
         )
+        .alert("删除线路", isPresented: $vm.showDeleteAlert) {
+            Button("取消", role: .cancel) { }
+            Button("删除", role: .destructive) { vm.doDeleteLine() }
+        } message: {
+            Text("确定删除当前线路？")
+        }
     }
 
     // MARK: - Gestures
