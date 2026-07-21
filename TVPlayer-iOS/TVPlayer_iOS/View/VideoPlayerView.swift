@@ -5,10 +5,7 @@ struct VideoPlayerView: UIViewRepresentable {
     @EnvironmentObject private var vm: PlayerViewModel
 
     func makeUIView(context: Context) -> UIView {
-        let view = PlayerView()
-        view.backgroundColor = .black
-        view.player = vm.player.player
-        return view
+        PlayerView(player: vm.player.player)
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
@@ -19,21 +16,26 @@ struct VideoPlayerView: UIViewRepresentable {
 
 private class PlayerView: UIView {
     var player: AVPlayer? {
-        get { playerLayer.player }
-        set { playerLayer.player = newValue }
+        didSet { playerLayer.player = player }
     }
 
     private var playerLayer: AVPlayerLayer {
-        guard let layer = layer as? AVPlayerLayer else { fatalError() }
-        return layer
+        layer as! AVPlayerLayer
     }
 
     override class var layerClass: AnyClass { AVPlayerLayer.self }
 
-    override init(frame: CGRect) {
-        super.init(frame: frame)
+    init(player: AVPlayer?) {
+        super.init(frame: .zero)
+        backgroundColor = .black
         playerLayer.videoGravity = .resizeAspectFill
+        self.player = player
     }
 
     required init?(coder: NSCoder) { nil }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        playerLayer.frame = bounds
+    }
 }

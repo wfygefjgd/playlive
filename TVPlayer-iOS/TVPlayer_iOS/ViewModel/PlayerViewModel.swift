@@ -2,13 +2,12 @@ import SwiftUI
 import AVKit
 import MediaPlayer
 
-let DEFAULT_SOURCE_URL = "https://raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8"
+let DEFAULT_SOURCE_URL = "https://ghproxy.net/https://raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8"
 
 let DEFAULT_MIRRORS = [
     DEFAULT_SOURCE_URL,
+    "https://raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
     "https://ghfast.top/raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
-    "https://raw.gitmirror.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
-    "https://raw.kkgithub.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
     "https://ghp.ci/https://raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
     "https://mirror.ghproxy.com/https://raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
 ]
@@ -19,7 +18,7 @@ let FLOAT_HIDE_MS: UInt64 = 2_500_000_000
 
 let PRESET_SOURCES: [(name: String, url: String)] = [
     ("默认源", DEFAULT_SOURCE_URL),
-    ("best-fan 全量", "https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_all.m3u8"),
+    ("best-fan 全量", "https://ghproxy.net/https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_all.m3u8"),
     ("TVBox", "https://ghfast.top/raw.githubusercontent.com/Supprise0901/TVBox_live/main/live.txt"),
     ("vbskycn", "https://raw.githubusercontent.com/vbskycn/iptv/master/tv/tv.m3u"),
     ("fanmingming", "https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv6.m3u"),
@@ -153,15 +152,8 @@ class PlayerViewModel: ObservableObject {
 
     func buildCandidates() -> [String] {
         var urls = [activeSourceUrl]
-        if activeSourceUrl == DEFAULT_SOURCE_URL {
+        if activeSourceUrl == DEFAULT_SOURCE_URL || activeSourceUrl.contains("raw.githubusercontent.com") || activeSourceUrl.contains("ghproxy") {
             for m in DEFAULT_MIRRORS where !urls.contains(m) { urls.append(m) }
-        } else if activeSourceUrl.contains("raw.githubusercontent.com") {
-            for prefix in ["https://ghfast.top/raw.githubusercontent.com/",
-                           "https://raw.gitmirror.com/",
-                           "https://raw.kkgithub.com/"] {
-                let mirrored = activeSourceUrl.replacingOccurrences(of: "https://raw.githubusercontent.com/", with: prefix)
-                if !urls.contains(mirrored) { urls.append(mirrored) }
-            }
         }
         return urls
     }
