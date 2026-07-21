@@ -41,7 +41,9 @@ struct ContentView: View {
     private var videoLayer: some View {
         VideoPlayerView()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped(false)
             .ignoresSafeArea(.all)
+            .contentShape(Rectangle())
             .onTapGesture { vm.showFloat() }
     }
 
