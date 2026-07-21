@@ -16,23 +16,39 @@ struct ChannelListPanel: View {
                 .padding(.top, 8)
 
             List {
-                ForEach(Array(filtered.enumerated()), id: \.element.id) { (_, ch) in
-                    channelRow(ch)
-                        .id(ch.id)
-                        .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(
-                            (channelsIndex(for: ch) == vm.currentIndex)
-                                ? Color(red: 0.035, green: 0.278, blue: 0.443)
-                                : Color.clear
-                        )
+                ForEach(filtered, id: \.id) { ch in
+                    Button {
+                        selectChannel(ch)
+                    } label: {
+                        HStack {
+                            Text(ch.name)
+                                .foregroundColor(.white)
+                                .font(.body)
+                                .lineLimit(1)
+                            Spacer()
+                            if ch.sourceCount > 1 {
+                                Text("\(ch.sourceCount)")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.plain)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(
+                        (channelsIndex(for: ch) == vm.currentIndex)
+                            ? Color(red: 0.035, green: 0.278, blue: 0.443)
+                            : Color(white: 0.12)
+                    )
                 }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .background(Color(white: 0.12))
-            // 保证列表滚动优先
-            .simultaneousGesture(DragGesture(minimumDistance: 1))
 
             Text(vm.indicatorText.isEmpty
                  ? "已加载 \(vm.channels.count) 个频道"
@@ -52,30 +68,13 @@ struct ChannelListPanel: View {
         }
     }
 
-    private func channelRow(_ ch: Channel) -> some View {
-        Button {
-            let ci = channelsIndex(for: ch)
-            guard ci >= 0 else { return }
-            vm.currentIndex = ci
-            vm.currentSourceIndex = 0
-            vm.panelVisible = false
-            vm.playCurrent()
-        } label: {
-            HStack {
-                Text(ch.name)
-                    .foregroundColor(.white)
-                    .font(.body)
-                    .lineLimit(1)
-                Spacer()
-                if ch.sourceCount > 1 {
-                    Text("\(ch.sourceCount)")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+    private func selectChannel(_ ch: Channel) {
+        let ci = channelsIndex(for: ch)
+        guard ci >= 0 else { return }
+        vm.currentIndex = ci
+        vm.currentSourceIndex = 0
+        vm.panelVisible = false
+        vm.playCurrent()
     }
 
     private func channelsIndex(for ch: Channel) -> Int {

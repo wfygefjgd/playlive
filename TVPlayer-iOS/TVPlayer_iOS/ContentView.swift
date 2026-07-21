@@ -11,40 +11,45 @@ struct ContentView: View {
             ZStack {
                 Color.black
 
-                // 手势仅挂在播放层，避免挡住侧栏 List 滚动
                 VideoPlayerView()
                     .frame(width: w, height: h)
                     .background(Color.black)
-                    .contentShape(Rectangle())
-                    .gesture(playerDragGesture(screenWidth: w))
-                    .onTapGesture { vm.showFloat() }
+                    .allowsHitTesting(!vm.panelVisible)
+                    .onTapGesture {
+                        guard !vm.panelVisible else { return }
+                        vm.showFloat()
+                    }
+
+                if !vm.panelVisible {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .gesture(playerDragGesture(screenWidth: w))
+                        .allowsHitTesting(!vm.locked)
+                }
 
                 if vm.panelVisible && !vm.locked {
                     HStack(spacing: 0) {
                         ChannelListPanel()
                             .frame(width: min(300, w * 0.32))
                             .frame(maxHeight: .infinity)
-                            .background(Color(white: 0.12).opacity(0.96))
-                            // 明确接收触摸，不被下层手势抢走
+
+                        Color.black.opacity(0.001)
                             .contentShape(Rectangle())
-                            .highPriorityGesture(DragGesture(minimumDistance: 0))
-                        Spacer(minLength: 0)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                vm.panelVisible = false
-                            }
+                            .onTapGesture { vm.panelVisible = false }
                     }
-                    .zIndex(10)
+                    .zIndex(50)
                 }
 
                 ChannelOSDView(text: vm.channelOSD)
+                    .allowsHitTesting(false)
                     .zIndex(5)
                 IndicatorView(text: vm.indicatorText)
+                    .allowsHitTesting(false)
                     .zIndex(5)
 
                 if vm.showFloatOverlay {
                     floatingButtons
-                        .zIndex(20)
+                        .zIndex(60)
                 }
             }
             .frame(width: w, height: h)
@@ -81,9 +86,8 @@ struct ContentView: View {
         }
     }
 
-    /// 播放区手势：右滑音量 / 左右切线路 / 中间上下换台
     private func playerDragGesture(screenWidth w: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 20)
+        DragGesture(minimumDistance: 24)
             .onChanged { value in
                 guard !vm.locked, !vm.panelVisible else { return }
                 let sx = value.startLocation.x
