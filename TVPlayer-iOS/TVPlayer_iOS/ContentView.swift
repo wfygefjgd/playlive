@@ -20,7 +20,6 @@ struct ContentView: View {
             }
             .ignoresSafeArea()
             .contentShape(Rectangle())
-            .gesture(tapGesture)
             .gesture(dragGesture)
             .onAppear { vm.startup() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
@@ -81,11 +80,6 @@ struct ContentView: View {
     }
 
     // MARK: - Gestures
-    private var tapGesture: some Gesture {
-        TapGesture(count: 2)
-            .onEnded { vm.onTap() }
-    }
-
     // Unified drag: brightness left, volume right, channel switch middle
     private var dragGesture: some Gesture {
         DragGesture(minimumDistance: 0)
@@ -108,8 +102,8 @@ struct ContentView: View {
                 let sx = value.startLocation.x
                 if abs(dx) > abs(dy), abs(dx) > 40 {
                     if sx < w * 0.35 || sx > w * 0.65 {
-                        if dx > 0 { vm.switchSource(direction: -1) }
-                        else { vm.switchSource(direction: 1) }
+                        if dx > 0 { vm.switchSource(direction: 1) }
+                        else { vm.switchSource(direction: -1) }
                     }
                 }
                 if abs(dy) > abs(dx), abs(dy) > 40 {

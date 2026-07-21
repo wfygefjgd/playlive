@@ -347,12 +347,6 @@ class PlayerViewModel: ObservableObject {
     func hideFloat() { showFloatOverlay = false }
 
     // MARK: - Actions
-    func onTap() {
-        showFloat()
-        guard !locked else { return }
-        player.toggle()
-    }
-
     func togglePanel() {
         guard !locked else { return }
         panelVisible.toggle()
