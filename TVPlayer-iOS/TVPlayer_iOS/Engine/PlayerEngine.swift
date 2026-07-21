@@ -1,7 +1,7 @@
 import AVKit
 import Combine
 
-class PlayerEngine: ObservableObject {
+final class PlayerEngine: ObservableObject {
     let player = AVPlayer()
     private var cancellables = Set<AnyCancellable>()
     private var statusObserver: NSKeyValueObservation?
@@ -17,7 +17,8 @@ class PlayerEngine: ObservableObject {
     var onSlowNetwork: (() -> Void)?
 
     init() {
-        player.actionAtItemEnd = .pause
+        player.actionAtItemEnd = .none
+        player.automaticallyWaitsToMinimizeStalling = true
         observeStatus()
     }
 
@@ -28,27 +29,38 @@ class PlayerEngine: ObservableObject {
         statusObserver?.invalidate()
         bufferObserver?.invalidate()
         cancelBufferTask()
+
         let item = AVPlayerItem(url: url)
         player.replaceCurrentItem(with: item)
+
         statusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             guard let self else { return }
             if item.status == .readyToPlay {
                 DispatchQueue.main.async {
                     guard self.playToken == token else { return }
                     self.isReady = true
+                    self.player.play()
+                    self.isPlaying = true
                     self.onReady?()
                 }
             } else if item.status == .failed {
-                DispatchQueue.main.async { self.onError?() }
+                DispatchQueue.main.async {
+                    guard self.playToken == token else { return }
+                    self.onError?()
+                }
             }
         }
+
         bufferObserver = item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
-            if !item.isPlaybackLikelyToKeepUp {
-                DispatchQueue.main.async { self?.startBufferTask() }
-            } else {
-                DispatchQueue.main.async { self?.cancelBufferTask() }
+            DispatchQueue.main.async {
+                if !item.isPlaybackLikelyToKeepUp {
+                    self?.startBufferTask()
+                } else {
+                    self?.cancelBufferTask()
+                }
             }
         }
+
         player.play()
         isPlaying = true
         isReady = false
@@ -88,30 +100,30 @@ class PlayerEngine: ObservableObject {
 
     private func observeStatus() {
         player.publisher(for: \.timeControlStatus)
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] status in
                 self?.isPlaying = status == .playing
             }
             .store(in: &cancellables)
     }
 
-    // Detect slow once, wait 4s, re-check; only switch if still slow
+    /// 卡顿 4s 后复查，仍慢再等 4s 确认后回调
     private func startBufferTask() {
         guard bufferTask == nil else { return }
-        bufferTask = Task {
+        bufferTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 4_000_000_000)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard isBufferingSlow else {
-                    cancelBufferTask()
-                    return
-                }
+            guard !Task.isCancelled, let self else { return }
+            let stillSlow = await MainActor.run { self.isBufferingSlow }
+            guard stillSlow, !Task.isCancelled else {
+                await MainActor.run { self.cancelBufferTask() }
+                return
             }
             try? await Task.sleep(nanoseconds: 4_000_000_000)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, let self else { return }
             await MainActor.run {
-                defer { cancelBufferTask() }
-                guard isBufferingSlow else { return }
-                onSlowNetwork?()
+                defer { self.cancelBufferTask() }
+                guard self.isBufferingSlow else { return }
+                self.onSlowNetwork?()
             }
         }
     }

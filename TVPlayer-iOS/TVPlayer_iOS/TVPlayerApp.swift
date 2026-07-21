@@ -10,6 +10,7 @@ struct TVPlayerApp: App {
                 .environmentObject(vm)
                 .preferredColorScheme(.dark)
                 .statusBarHidden(true)
+                .persistentSystemOverlays(.hidden)
         }
     }
 }

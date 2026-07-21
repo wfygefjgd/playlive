@@ -6,22 +6,32 @@ struct ContentView: View {
 
     var body: some View {
         GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
             ZStack {
                 Color.black
-                videoLayer
+                VideoPlayerView()
+                    .frame(width: w, height: h)
+                    .onTapGesture { vm.showFloat() }
+
                 if vm.panelVisible && !vm.locked {
-                    channelPanel(width: min(300, geo.size.width * 0.32))
+                    HStack(spacing: 0) {
+                        ChannelListPanel()
+                            .frame(width: min(300, w * 0.32))
+                        Spacer(minLength: 0)
+                    }
                 }
-                channelOSD
-                indicator
+
+                ChannelOSDView(text: vm.channelOSD)
+                IndicatorView(text: vm.indicatorText)
+
                 if vm.showFloatOverlay {
                     floatingButtons
                 }
             }
-            .frame(width: geo.size.width, height: geo.size.height)
-            .ignoresSafeArea(.all)
+            .frame(width: w, height: h)
             .contentShape(Rectangle())
-            .gesture(dragGesture)
+            .gesture(dragGesture(screenWidth: max(w, 1)))
             .onAppear { vm.startup() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
                 vm.pause()
@@ -35,37 +45,9 @@ struct ContentView: View {
             }
         }
         .ignoresSafeArea(.all)
+        .background(Color.black)
     }
 
-    // MARK: - Video Layer
-    private var videoLayer: some View {
-        VideoPlayerView()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .ignoresSafeArea(.all)
-            .contentShape(Rectangle())
-            .onTapGesture { vm.showFloat() }
-    }
-
-    // MARK: - Channel Panel
-    private func channelPanel(width: CGFloat) -> some View {
-        HStack(spacing: 0) {
-            ChannelListPanel()
-                .frame(width: width)
-            Spacer()
-        }
-    }
-
-    // MARK: - OSD
-    private var channelOSD: some View {
-        ChannelOSDView(text: vm.channelOSD)
-    }
-
-    // MARK: - Indicator
-    private var indicator: some View {
-        IndicatorView(text: vm.indicatorText)
-    }
-
-    // MARK: - Floating Buttons
     private var floatingButtons: some View {
         FloatingButtons(
             panelVisible: vm.panelVisible,
@@ -83,14 +65,13 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Gestures
-    // Unified drag: brightness left, volume right, channel switch middle
-    private var dragGesture: some Gesture {
+    private func dragGesture(screenWidth w: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 guard !vm.locked else { return }
-                let w = UIScreen.main.bounds.width
                 let sx = value.startLocation.x
+                let vertical = abs(value.translation.height) >= abs(value.translation.width)
+                guard vertical else { return }
                 if sx < w * 0.35 {
                     vm.adjustBrightness(delta: Float(-value.translation.height) / 300)
                 } else if sx > w * 0.65 {
@@ -101,15 +82,13 @@ struct ContentView: View {
                 guard !vm.locked else { return }
                 let dx = value.translation.width
                 let dy = value.translation.height
-                let w = UIScreen.main.bounds.width
                 let sx = value.startLocation.x
                 if abs(dx) > abs(dy), abs(dx) > 40 {
                     if sx < w * 0.35 || sx > w * 0.65 {
                         if dx > 0 { vm.switchSource(direction: -1) }
                         else { vm.switchSource(direction: 1) }
                     }
-                }
-                if abs(dy) > abs(dx), abs(dy) > 40 {
+                } else if abs(dy) > abs(dx), abs(dy) > 40 {
                     if sx >= w * 0.35 && sx <= w * 0.65 {
                         if dy < 0 { vm.nextChannel() }
                         else { vm.prevChannel() }

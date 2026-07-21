@@ -1,12 +1,11 @@
 import SwiftUI
 import AVKit
-import MediaPlayer
-
 
 let DEFAULT_SOURCE_URL = "https://ghproxy.net/https://raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8"
 
-let CHANNEL_OSD_MS: UInt64 = 2_500_000_000
-let FLOAT_HIDE_MS: UInt64 = 2_500_000_000
+private let CHANNEL_OSD_MS: UInt64 = 2_500_000_000
+private let FLOAT_HIDE_MS: UInt64 = 2_500_000_000
+private let INDICATOR_MS: UInt64 = 1_200_000_000
 
 let PRESET_SOURCES: [(name: String, url: String)] = [
     ("默认源", DEFAULT_SOURCE_URL),
@@ -17,7 +16,7 @@ let PRESET_SOURCES: [(name: String, url: String)] = [
 ]
 
 @MainActor
-class PlayerViewModel: ObservableObject {
+final class PlayerViewModel: ObservableObject {
     @Published var channels: [Channel] = []
     @Published var currentIndex = 0
     @Published var currentSourceIndex = 0
@@ -35,37 +34,38 @@ class PlayerViewModel: ObservableObject {
     var sourceUrls: [String] = []
     var activeSourceUrl = DEFAULT_SOURCE_URL
     private var autoSwitching = false
+    private var started = false
     private var osdTask: Task<Void, Never>?
     private var indTask: Task<Void, Never>?
     private var floatTask: Task<Void, Never>?
-        func startup() {
-    player.onSlowNetwork = { [weak self] in
-        Task { @MainActor in
-            self?.onSlowNetwork()
+
+    func startup() {
+        guard !started else { return }
+        started = true
+
+        player.onSlowNetwork = { [weak self] in
+            Task { @MainActor in self?.onSlowNetwork() }
         }
-    }
-    player.onReady = { [weak self] in
-        Task { @MainActor in
-            self?.onPlayerReady()
+        player.onReady = { [weak self] in
+            Task { @MainActor in self?.onPlayerReady() }
         }
-    }
-    player.onError = { [weak self] in
-        Task { @MainActor in
-            self?.onPlayerError()
+        player.onError = { [weak self] in
+            Task { @MainActor in self?.onPlayerError() }
         }
-    }
-    restoreSources()
-    let cached = applyRules(storage.loadChannels())
-    if !cached.isEmpty {
-        channels = cached
-        currentIndex = 0
-        currentSourceIndex = 0
-        playCurrent(showOSD: false)
-    }
-    loadChannels(force: cached.isEmpty)
+
+        restoreSources()
+        let cached = applyRules(storage.loadChannels())
+        if !cached.isEmpty {
+            channels = cached
+            currentIndex = 0
+            currentSourceIndex = 0
+            playCurrent(showOSD: false)
+        }
+        loadChannels(force: cached.isEmpty)
     }
 
     // MARK: - Sources
+
     func restoreSources() {
         var urls = OrderedDictionary<String, Bool>()
         for p in PRESET_SOURCES { urls[p.url] = true }
@@ -110,7 +110,24 @@ class PlayerViewModel: ObservableObject {
         loadChannels(force: true)
     }
 
+    func deleteSourceUrl(_ url: String) {
+        guard url != DEFAULT_SOURCE_URL else { return }
+        sourceUrls.removeAll { $0 == url }
+        storage.removeSourceUrl(url)
+        if activeSourceUrl == url {
+            activeSourceUrl = DEFAULT_SOURCE_URL
+            if !sourceUrls.contains(DEFAULT_SOURCE_URL) {
+                sourceUrls.append(DEFAULT_SOURCE_URL)
+            }
+            persistSources()
+            reloadActiveSource()
+        } else {
+            persistSources()
+        }
+    }
+
     // MARK: - Load
+
     func loadChannels(force: Bool = true) {
         guard !player.isReady || force else { return }
         indicatorText = "加载中..."
@@ -123,11 +140,7 @@ class PlayerViewModel: ObservableObject {
 
     private func onChannelsLoaded(_ loaded: [Channel]) {
         guard !loaded.isEmpty else {
-            if channels.isEmpty {
-                showIndicator("加载失败")
-            } else {
-                showIndicator("刷新失败")
-            }
+            showIndicator(channels.isEmpty ? "加载失败" : "刷新失败")
             return
         }
         rawChannels = loaded.map { Channel(name: $0.name, group: $0.group, key: $0.key, urls: $0.urls) }
@@ -138,7 +151,7 @@ class PlayerViewModel: ObservableObject {
         }
         storage.saveChannels(loaded)
         showIndicator("已加载 \(channels.count) 个频道")
-        currentIndex = 0
+        currentIndex = min(currentIndex, channels.count - 1)
         currentSourceIndex = 0
         playCurrent(showOSD: false)
     }
@@ -152,6 +165,7 @@ class PlayerViewModel: ObservableObject {
     }
 
     // MARK: - Rules
+
     func applyRules(_ input: [Channel]) -> [Channel] {
         input.compactMap { src in
             let filtered = Channel(name: src.name, group: src.group, key: src.key)
@@ -174,25 +188,25 @@ class PlayerViewModel: ObservableObject {
     }
 
     // MARK: - Current
+
     var currentChannel: Channel? {
-        guard !channels.isEmpty, (0..<channels.count).contains(currentIndex) else { return nil }
+        guard !channels.isEmpty, channels.indices.contains(currentIndex) else { return nil }
         return channels[currentIndex]
     }
 
     var currentUrl: String? {
-        guard let ch = currentChannel,
-              (0..<ch.sourceCount).contains(currentSourceIndex) else { return nil }
+        guard let ch = currentChannel, ch.urls.indices.contains(currentSourceIndex) else { return nil }
         return ch.urls[currentSourceIndex]
     }
 
     // MARK: - Play
+
     func playCurrent(showOSD: Bool = true) {
-        guard let ch = currentChannel, let url = currentUrl, let u = URL(string: url) else {
+        guard currentChannel != nil, let url = currentUrl, let u = URL(string: url) else {
             showIndicator("当前频道地址无效")
             return
         }
         autoSwitching = false
-
         player.play(url: u)
         if showOSD { showChannelOSD() }
         showFloat()
@@ -201,11 +215,13 @@ class PlayerViewModel: ObservableObject {
     private func onPlayerReady() {
         autoSwitching = false
         scheduleHideFloat()
-        showIndicator("")
+        if !indicatorText.isEmpty {
+            showIndicator("")
+        }
     }
 
     private func onPlayerError() {
-        // 隐藏播放错误提示
+        // 不弹播放失败提示
     }
 
     func onSlowNetwork() {
@@ -214,6 +230,7 @@ class PlayerViewModel: ObservableObject {
     }
 
     // MARK: - Navigation
+
     func nextChannel() {
         guard !locked, !channels.isEmpty else { return }
         currentIndex = (currentIndex + 1) % channels.count
@@ -242,7 +259,7 @@ class PlayerViewModel: ObservableObject {
         playCurrent()
     }
 
-func switchNextLine(hint: String) {
+    func switchNextLine(hint: String) {
         guard let ch = currentChannel, ch.sourceCount > 1, !autoSwitching else {
             autoSwitching = false
             showIndicator(hint)
@@ -260,34 +277,8 @@ func switchNextLine(hint: String) {
         playCurrent()
     }
 
-    func deleteSourceUrl(_ url: String) {
-        guard url != DEFAULT_SOURCE_URL else { return }
-        sourceUrls.removeAll { $0 == url }
-        storage.removeSourceUrl(url)
-        if activeSourceUrl == url {
-            activeSourceUrl = DEFAULT_SOURCE_URL
-            if !sourceUrls.contains(DEFAULT_SOURCE_URL) {
-                sourceUrls.append(DEFAULT_SOURCE_URL)
-            }
-            persistSources()
-            reloadActiveSource()
-        } else {
-            persistSources()
-        }
-    }
-
-    func switchToNextSource() {
-        guard sourceUrls.count > 1 else { return }
-        let current = activeSourceUrl
-        if let idx = sourceUrls.firstIndex(of: current) {
-            let next = (idx + 1) % sourceUrls.count
-            selectSource(sourceUrls[next])
-        } else {
-            selectSource(sourceUrls[0])
-        }
-    }
-
     // MARK: - OSD / Indicator
+
     func showChannelOSD() {
         guard let ch = currentChannel else { return }
         var text = "\(currentIndex + 1)/\(channels.count) \(ch.name)"
@@ -306,14 +297,16 @@ func switchNextLine(hint: String) {
     func showIndicator(_ text: String) {
         indicatorText = text
         indTask?.cancel()
+        guard !text.isEmpty else { return }
         indTask = Task {
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            try? await Task.sleep(nanoseconds: INDICATOR_MS)
             guard !Task.isCancelled else { return }
             await MainActor.run { indicatorText = "" }
         }
     }
 
-    // MARK: - Float buttons
+    // MARK: - Float
+
     func showFloat() {
         showFloatOverlay = true
         cancelHideFloat()
@@ -330,10 +323,17 @@ func switchNextLine(hint: String) {
         }
     }
 
-    func cancelHideFloat() { floatTask?.cancel(); floatTask = nil }
-    func hideFloat() { showFloatOverlay = false }
+    func cancelHideFloat() {
+        floatTask?.cancel()
+        floatTask = nil
+    }
+
+    func hideFloat() {
+        showFloatOverlay = false
+    }
 
     // MARK: - Actions
+
     func togglePanel() {
         guard !locked else { return }
         panelVisible.toggle()
@@ -365,8 +365,9 @@ func switchNextLine(hint: String) {
     }
 
     // MARK: - Delete line
+
     func confirmDeleteLine() {
-        guard let ch = currentChannel, currentUrl != nil else { return }
+        guard currentUrl != nil else { return }
         showDeleteAlert = true
     }
 
@@ -378,8 +379,7 @@ func switchNextLine(hint: String) {
         let oldIdx = currentIndex
 
         let source = rawChannels.isEmpty ? channels : rawChannels
-        let rebuilt = applyRules(source)
-        channels = rebuilt
+        channels = applyRules(source)
 
         guard !channels.isEmpty else {
             player.stop()
@@ -392,7 +392,10 @@ func switchNextLine(hint: String) {
         if let found = channels.firstIndex(where: { $0.key == targetKey }) {
             currentIndex = found
             let updated = channels[found]
-            if updated.sourceCount <= 0 { nextChannel(); return }
+            if updated.sourceCount <= 0 {
+                nextChannel()
+                return
+            }
             currentSourceIndex = nextIdx >= 0 && nextIdx < updated.sourceCount ? nextIdx : 0
         } else {
             currentIndex = min(oldIdx, channels.count - 1)
@@ -403,18 +406,26 @@ func switchNextLine(hint: String) {
     }
 }
 
-// MARK: - Ordered Dictionary helper
+// MARK: - Ordered Dictionary
+
 struct OrderedDictionary<Key: Hashable, Value> {
     private var _keys: [Key] = []
     private var dict: [Key: Value] = [:]
+
     var keys: [Key] { _keys }
-    var values: [Value] { _keys.compactMap { dict[$0] } }
+
     subscript(key: Key) -> Value? {
         get { dict[key] }
         set {
-            if newValue == nil { dict.removeValue(forKey: key); _keys.removeAll { $0 == key } }
-            else if dict[key] == nil { _keys.append(key); dict[key] = newValue }
-            else { dict[key] = newValue }
+            if newValue == nil {
+                dict.removeValue(forKey: key)
+                _keys.removeAll { $0 == key }
+            } else if dict[key] == nil {
+                _keys.append(key)
+                dict[key] = newValue
+            } else {
+                dict[key] = newValue
+            }
         }
     }
 }
