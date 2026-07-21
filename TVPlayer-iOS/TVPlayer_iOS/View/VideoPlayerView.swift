@@ -1,23 +1,36 @@
 import SwiftUI
 import AVKit
 
-struct VideoPlayerView: UIViewControllerRepresentable {
-    @EnvironmentObject private var vm: PlayerViewModel
-
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let c = AVPlayerViewController()
-        c.player = vm.player.player
-        c.showsPlaybackControls = false
-        c.videoGravity = .resizeAspectFill
-        c.allowsPictureInPicturePlayback = false
-        c.updatesNowPlayingInfoCenter = false
-        c.view.backgroundColor = .black
-        c.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        c.view.clipsToBounds = true
-        return c
-    }
-
-    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-        uiViewController.player = vm.player.player
+class PlayerContainerView: UIView {
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if let layer = layer.sublayers?.first as? AVPlayerLayer {
+            layer.frame = bounds
+        }
     }
 }
+
+struct VideoPlayerView: UIViewRepresentable {
+    @EnvironmentObject private var vm: PlayerViewModel
+
+    func makeUIView(context: Context) -> UIView {
+        let view = PlayerContainerView()
+        view.backgroundColor = .black
+        view.clipsToBounds = true
+        let layer = AVPlayerLayer(player: vm.player.player)
+        layer.videoGravity = .resizeAspectFill
+        layer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        layer.frame = view.bounds
+        view.layer.addSublayer(layer)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        if let view = uiView as? PlayerContainerView,
+           let layer = view.layer.sublayers?.first as? AVPlayerLayer {
+            layer.player = vm.player.player
+        }
+    }
+}
+</parameter>
+<parameter name="arguments" string="false">{"filePath": "C:\\\\Users\\\\96335\\\\Desktop\\\\TVPlayer\\\\TVPlayer-iOS\\\\TVPlayer_iOS\\\\View\\\\VideoPlayerView.swift"}
