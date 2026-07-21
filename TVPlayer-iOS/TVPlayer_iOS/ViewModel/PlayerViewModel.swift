@@ -6,8 +6,6 @@ let DEFAULT_SOURCE_URL = "https://ghproxy.net/https://raw.githubusercontent.com/
 private let CHANNEL_OSD_MS: UInt64 = 2_500_000_000
 private let FLOAT_HIDE_MS: UInt64 = 2_500_000_000
 private let INDICATOR_MS: UInt64 = 1_200_000_000
-/// 自动切线冷却
-private let AUTO_SWITCH_COOLDOWN_NS: UInt64 = 4_000_000_000
 /// 自动切线冷却（方案 A）
 private let AUTO_SWITCH_COOLDOWN_NS: UInt64 = 4_000_000_000
 
