@@ -6,7 +6,6 @@ import MediaPlayer
 let DEFAULT_SOURCE_URL = "https://ghproxy.net/https://raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8"
 
 let CHANNEL_OSD_MS: UInt64 = 2_500_000_000
-let STALL_TIMEOUT_MS: UInt64 = 7_000_000_000
 let FLOAT_HIDE_MS: UInt64 = 2_500_000_000
 
 let PRESET_SOURCES: [(name: String, url: String)] = [
@@ -35,12 +34,9 @@ class PlayerViewModel: ObservableObject {
     private var rawChannels: [Channel] = []
     var sourceUrls: [String] = []
     var activeSourceUrl = DEFAULT_SOURCE_URL
-    private var waitingForReady = false
     private var autoSwitching = false
-    private var playbackToken = 0
     private var osdTask: Task<Void, Never>?
     private var indTask: Task<Void, Never>?
-    private var stallTask: Task<Void, Never>?
     private var floatTask: Task<Void, Never>?
         func startup() {
     player.onSlowNetwork = { [weak self] in
@@ -64,7 +60,7 @@ class PlayerViewModel: ObservableObject {
         channels = cached
         currentIndex = 0
         currentSourceIndex = 0
-        playCurrent(showOSD: false, timeoutMs: STALL_TIMEOUT_MS)
+        playCurrent(showOSD: false)
     }
     loadChannels(force: cached.isEmpty)
     }
@@ -144,7 +140,7 @@ class PlayerViewModel: ObservableObject {
         showIndicator("已加载 \(channels.count) 个频道")
         currentIndex = 0
         currentSourceIndex = 0
-        playCurrent(showOSD: false, timeoutMs: STALL_TIMEOUT_MS)
+        playCurrent(showOSD: false)
     }
 
     func buildCandidates() -> [String] {
@@ -190,16 +186,12 @@ class PlayerViewModel: ObservableObject {
     }
 
     // MARK: - Play
-    func playCurrent(showOSD: Bool = true, timeoutMs: UInt64 = STALL_TIMEOUT_MS) {
+    func playCurrent(showOSD: Bool = true) {
         guard let ch = currentChannel, let url = currentUrl, let u = URL(string: url) else {
             showIndicator("当前频道地址无效")
             return
         }
-        playbackToken += 1
-        waitingForReady = true
         autoSwitching = false
-        cancelStall()
-        scheduleStall(timeoutMs: timeoutMs)
 
         player.play(url: u)
         if showOSD { showChannelOSD() }
@@ -207,16 +199,12 @@ class PlayerViewModel: ObservableObject {
     }
 
     private func onPlayerReady() {
-        waitingForReady = false
         autoSwitching = false
-        cancelStall()
         scheduleHideFloat()
         showIndicator("")
     }
 
     private func onPlayerError() {
-        waitingForReady = false
-        cancelStall()
         showIndicator("播放失败")
     }
 
@@ -251,7 +239,7 @@ class PlayerViewModel: ObservableObject {
             return
         }
         currentSourceIndex = (currentSourceIndex + direction + ch.sourceCount) % ch.sourceCount
-        playCurrent(timeoutMs: STALL_TIMEOUT_MS)
+        playCurrent()
     }
 
 func switchNextLine(hint: String) {
@@ -269,7 +257,7 @@ func switchNextLine(hint: String) {
         }
         currentSourceIndex = nxt
         showIndicator(hint)
-        playCurrent(timeoutMs: STALL_TIMEOUT_MS)
+        playCurrent()
     }
 
     func deleteSourceUrl(_ url: String) {
@@ -298,22 +286,6 @@ func switchNextLine(hint: String) {
             selectSource(sourceUrls[0])
         }
     }
-
-    // MARK: - Stall
-    private func scheduleStall(timeoutMs: UInt64) {
-        cancelStall()
-        let token = playbackToken
-        stallTask = Task {
-            try? await Task.sleep(nanoseconds: timeoutMs * 1_000_000)
-            guard !Task.isCancelled, token == playbackToken, waitingForReady else { return }
-            await MainActor.run {
-                waitingForReady = false
-                switchNextLine(hint: "线路超时，切换下一线路")
-            }
-        }
-    }
-
-    private func cancelStall() { stallTask?.cancel(); stallTask = nil }
 
     // MARK: - OSD / Indicator
     func showChannelOSD() {
@@ -427,7 +399,7 @@ func switchNextLine(hint: String) {
             currentSourceIndex = 0
         }
         showIndicator("已删除当前线路")
-        playCurrent(timeoutMs: STALL_TIMEOUT_MS)
+        playCurrent()
     }
 }
 

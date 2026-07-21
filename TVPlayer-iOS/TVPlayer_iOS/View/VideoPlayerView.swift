@@ -19,7 +19,7 @@ struct VideoPlayerView: UIViewRepresentable {
         view.clipsToBounds = true
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         let layer = AVPlayerLayer(player: vm.player.player)
-        layer.videoGravity = .resizeAspect
+        layer.videoGravity = .resizeAspectFill
         layer.frame = view.bounds
         view.layer.addSublayer(layer)
         return view
