@@ -9,6 +9,8 @@ let DEFAULT_MIRRORS = [
     "https://ghfast.top/raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
     "https://raw.gitmirror.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
     "https://raw.kkgithub.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
+    "https://ghp.ci/https://raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
+    "https://mirror.ghproxy.com/https://raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
 ]
 
 let CHANNEL_OSD_MS: UInt64 = 2_500_000_000
