@@ -107,5 +107,3 @@ class PlayerEngine: ObservableObject {
         bufferTask = nil
     }
 }
-</parameter>
-<｜DSML｜parameter name="filePath" string="true">C:\\Users\\96335\\Desktop\\TVPlayer\\TVPlayer-iOS\\TVPlayer_iOS\\Engine\\PlayerEngine.swift
