@@ -14,7 +14,9 @@ struct ContentView: View {
                 }
                 channelOSD
                 indicator
-                floatingButtons
+                if vm.showFloatOverlay {
+                    floatingButtons
+                }
             }
             .ignoresSafeArea()
             .contentShape(Rectangle())
@@ -29,6 +31,10 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 vm.resume()
             }
+            .sheet(isPresented: $vm.showSourceSheet) {
+                SourceManagementSheet()
+                    .environmentObject(vm)
+            }
         }
     }
 
@@ -36,6 +42,7 @@ struct ContentView: View {
     private var videoLayer: some View {
         VideoPlayerView()
             .ignoresSafeArea()
+            .onTapGesture { vm.showFloat() }
     }
 
     // MARK: - Channel Panel
@@ -63,7 +70,7 @@ struct ContentView: View {
             panelVisible: vm.panelVisible,
             locked: vm.locked,
             onTogglePanel: { vm.togglePanel() },
-            onLongPanel: { vm.switchToNextSource() },
+            onLongPanel: { vm.showSourceSheet = true },
             onToggleLock: { vm.toggleLock() },
             onLongLock: { vm.confirmDeleteLine() }
         )
@@ -92,13 +99,13 @@ struct ContentView: View {
                 if abs(dx) > abs(dy) {
                     guard abs(dx) > 40 else { return }
                     if x < w * 0.35 || x > w * 0.65 {
-                        if dx > 0 { vm.switchSource(direction: -1) }
-                        else { vm.switchSource(direction: 1) }
+                        if dx > 0 { vm.switchSource(direction: 1) }
+                        else { vm.switchSource(direction: -1) }
                     }
                 } else {
                     guard abs(dy) > 40 else { return }
                     if x >= w * 0.35 && x <= w * 0.65 {
-                        if dy > 0 { vm.nextChannel() }
+                        if dy < 0 { vm.nextChannel() }
                         else { vm.prevChannel() }
                     }
                 }
@@ -109,7 +116,7 @@ struct ContentView: View {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 guard !vm.locked, value.translation.width.magnitude < value.translation.height.magnitude else { return }
-                if value.location.x < UIScreen.main.bounds.width * 0.35 {
+                if value.startLocation.x < UIScreen.main.bounds.width * 0.35 {
                     vm.adjustBrightness(delta: Float(-value.translation.height) / 300)
                 }
             }
@@ -119,7 +126,7 @@ struct ContentView: View {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 guard !vm.locked, value.translation.width.magnitude < value.translation.height.magnitude else { return }
-                if value.location.x > UIScreen.main.bounds.width * 0.65 {
+                if value.startLocation.x > UIScreen.main.bounds.width * 0.65 {
                     vm.adjustVolume(delta: Float(-value.translation.height) / 80)
                 }
             }

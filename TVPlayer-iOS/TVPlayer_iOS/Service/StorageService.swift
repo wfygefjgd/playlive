@@ -62,6 +62,12 @@ class StorageService {
         loadHiddenLines().contains(url.trimmingCharacters(in: .whitespaces))
     }
 
+    func removeSourceUrl(_ url: String) {
+        var urls = loadSourceUrls()
+        urls.removeAll { $0 == url }
+        saveSourceUrls(urls)
+    }
+
     func loadFavorites() -> Set<String> {
         Set(defaults.stringArray(forKey: kFavorites) ?? [])
     }

@@ -28,6 +28,7 @@ class PlayerViewModel: ObservableObject {
     @Published var showDeleteAlert = false
     @Published var channelOSD: String = ""
     @Published var indicatorText: String = ""
+    @Published var showFloatOverlay = false
 
     let player = PlayerEngine()
     private let storage = StorageService()
@@ -214,6 +215,7 @@ class PlayerViewModel: ObservableObject {
         guard !locked, !channels.isEmpty else { return }
         currentIndex = (currentIndex + 1) % channels.count
         currentSourceIndex = 0
+        panelVisible = false
         playCurrent()
     }
 
@@ -221,6 +223,7 @@ class PlayerViewModel: ObservableObject {
         guard !locked, !channels.isEmpty else { return }
         currentIndex = (currentIndex - 1 + channels.count) % channels.count
         currentSourceIndex = 0
+        panelVisible = false
         playCurrent()
     }
 
@@ -252,6 +255,22 @@ class PlayerViewModel: ObservableObject {
         currentSourceIndex = nxt
         indicatorText = hint
         playCurrent(timeoutMs: STALL_TIMEOUT_MS)
+    }
+
+    func deleteSourceUrl(_ url: String) {
+        guard url != DEFAULT_SOURCE_URL else { return }
+        sourceUrls.removeAll { $0 == url }
+        storage.removeSourceUrl(url)
+        if activeSourceUrl == url {
+            activeSourceUrl = DEFAULT_SOURCE_URL
+            if !sourceUrls.contains(DEFAULT_SOURCE_URL) {
+                sourceUrls.append(DEFAULT_SOURCE_URL)
+            }
+            persistSources()
+            reloadActiveSource()
+        } else {
+            persistSources()
+        }
     }
 
     func switchToNextSource() {
@@ -309,8 +328,8 @@ class PlayerViewModel: ObservableObject {
 
     // MARK: - Float buttons
     func showFloat() {
+        showFloatOverlay = true
         cancelHideFloat()
-        objectWillChange.send()
         scheduleHideFloat()
     }
 
@@ -325,8 +344,7 @@ class PlayerViewModel: ObservableObject {
     }
 
     func cancelHideFloat() { floatTask?.cancel(); floatTask = nil }
-    func hideFloat() { }
-    // float visibility is controlled by onChanged via schedule
+    func hideFloat() { showFloatOverlay = false }
 
     // MARK: - Actions
     func onTap() {
@@ -357,12 +375,11 @@ class PlayerViewModel: ObservableObject {
     func adjustBrightness(delta: Float) {
         let current = UIScreen.main.brightness
         UIScreen.main.brightness = max(0.05, min(1.0, current + CGFloat(delta)))
-        showIndicator("亮度 \(Int(UIScreen.main.brightness * 100))%")
+        showFloat()
     }
 
     func adjustVolume(delta: Float) {
-        // Use MPVolumeView
-        showIndicator("音量 \(delta)")
+        showFloat()
     }
 
     // MARK: - Delete line
@@ -386,7 +403,7 @@ class PlayerViewModel: ObservableObject {
             player.stop()
             currentIndex = 0
             currentSourceIndex = 0
-            indicatorText = "线路已删除"
+            showIndicator("线路已删除")
             return
         }
 
@@ -399,7 +416,7 @@ class PlayerViewModel: ObservableObject {
             currentIndex = min(oldIdx, channels.count - 1)
             currentSourceIndex = 0
         }
-        indicatorText = "已删除当前线路"
+        showIndicator("已删除当前线路")
         playCurrent(timeoutMs: STALL_TIMEOUT_MS)
     }
 }
