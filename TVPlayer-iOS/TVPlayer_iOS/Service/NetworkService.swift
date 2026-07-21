@@ -13,7 +13,7 @@ class NetworkService {
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse,
               (200...299).contains(http.statusCode),
-              let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf8) else {
+              let text = String(data: data, encoding: .utf8) else {
             throw URLError(.badServerResponse)
         }
         return text

@@ -43,30 +43,30 @@ class PlayerViewModel: ObservableObject {
     private var stallTask: Task<Void, Never>?
     private var floatTask: Task<Void, Never>?
         func startup() {
-        player.onSlowNetwork = { [weak self] in
-            Task { @MainActor in
-                self?.onSlowNetwork()
-            }
+    player.onSlowNetwork = { [weak self] in
+        Task { @MainActor in
+            self?.onSlowNetwork()
         }
-        player.onReady = { [weak self] in
-            Task { @MainActor in
-                self?.onPlayerReady()
-            }
+    }
+    player.onReady = { [weak self] in
+        Task { @MainActor in
+            self?.onPlayerReady()
         }
-        player.onError = { [weak self] in
-            Task { @MainActor in
-                self?.onPlayerError()
-            }
+    }
+    player.onError = { [weak self] in
+        Task { @MainActor in
+            self?.onPlayerError()
         }
-        restoreSources()
-        let cached = applyRules(storage.loadChannels())
-        if !cached.isEmpty {
-            channels = cached
-            currentIndex = 0
-            currentSourceIndex = 0
-            playCurrent(showOSD: false, timeoutMs: STALL_TIMEOUT_MS)
-        }
-        loadChannels(force: cached.isEmpty)
+    }
+    restoreSources()
+    let cached = applyRules(storage.loadChannels())
+    if !cached.isEmpty {
+        channels = cached
+        currentIndex = 0
+        currentSourceIndex = 0
+        playCurrent(showOSD: false, timeoutMs: STALL_TIMEOUT_MS)
+    }
+    loadChannels(force: cached.isEmpty)
     }
 
     // MARK: - Sources
@@ -148,7 +148,11 @@ class PlayerViewModel: ObservableObject {
     }
 
     func buildCandidates() -> [String] {
-        [activeSourceUrl]
+        var candidates = [activeSourceUrl]
+        for url in sourceUrls where url != activeSourceUrl {
+            candidates.append(url)
+        }
+        return candidates
     }
 
     // MARK: - Rules
@@ -213,7 +217,7 @@ class PlayerViewModel: ObservableObject {
     private func onPlayerError() {
         waitingForReady = false
         cancelStall()
-        switchNextLine(hint: "播放失败，切换下一线路")
+        showIndicator("播放失败")
     }
 
     func onSlowNetwork() {

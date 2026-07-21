@@ -17,17 +17,18 @@ struct VideoPlayerView: UIViewRepresentable {
         let view = PlayerContainerView()
         view.backgroundColor = .black
         view.clipsToBounds = true
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         let layer = AVPlayerLayer(player: vm.player.player)
-        layer.videoGravity = .resizeAspectFill
+        layer.videoGravity = .resizeAspect
         layer.frame = view.bounds
         view.layer.addSublayer(layer)
         return view
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
-        if let view = uiView as? PlayerContainerView,
-           let layer = view.layer.sublayers?.first as? AVPlayerLayer {
-            layer.player = vm.player.player
-        }
+        guard let view = uiView as? PlayerContainerView,
+              let layer = view.layer.sublayers?.first as? AVPlayerLayer else { return }
+        layer.player = vm.player.player
+        layer.frame = view.bounds
     }
 }

@@ -31,8 +31,15 @@ class PlayerEngine: ObservableObject {
         let item = AVPlayerItem(url: url)
         player.replaceCurrentItem(with: item)
         statusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
-            if item.status == .failed {
-                DispatchQueue.main.async { self?.onError?() }
+            guard let self else { return }
+            if item.status == .readyToPlay {
+                DispatchQueue.main.async {
+                    guard self.playToken == token else { return }
+                    self.isReady = true
+                    self.onReady?()
+                }
+            } else if item.status == .failed {
+                DispatchQueue.main.async { self.onError?() }
             }
         }
         bufferObserver = item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
@@ -47,13 +54,12 @@ class PlayerEngine: ObservableObject {
         isReady = false
 
         Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
             await MainActor.run {
-                guard let self, self.playToken == token else { return }
-                if self.player.currentItem?.status == .readyToPlay || self.player.rate > 0 {
-                    self.isReady = true
-                    self.onReady?()
-                }
+                guard let self, self.playToken == token, !self.isReady,
+                      self.player.currentItem?.status == .readyToPlay else { return }
+                self.isReady = true
+                self.onReady?()
             }
         }
     }
@@ -96,7 +102,7 @@ class PlayerEngine: ObservableObject {
     private func startBufferTask() {
         cancelBufferTask()
         bufferTask = Task {
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run { onSlowNetwork?() }
         }
