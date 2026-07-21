@@ -353,12 +353,6 @@ final class PlayerViewModel: ObservableObject {
     func pause() { player.pause() }
     func resume() { player.resume() }
 
-    func adjustBrightness(delta: Float) {
-        let current = UIScreen.main.brightness
-        UIScreen.main.brightness = max(0.05, min(1.0, current + CGFloat(delta)))
-        showFloat()
-    }
-
     func adjustVolume(delta: Float) {
         player.volume = max(0, min(1, player.volume + delta))
         showFloat()

@@ -73,12 +73,9 @@ struct ContentView: View {
                 guard !vm.locked else { return }
                 let sx = value.startLocation.x
                 let vertical = abs(value.translation.height) >= abs(value.translation.width)
-                guard vertical else { return }
-                if sx < w * 0.35 {
-                    vm.adjustBrightness(delta: Float(-value.translation.height) / 300)
-                } else if sx > w * 0.65 {
-                    vm.adjustVolume(delta: Float(-value.translation.height) / 80)
-                }
+                // 仅右侧上下滑动调节音量（已去掉左侧亮度）
+                guard vertical, sx > w * 0.65 else { return }
+                vm.adjustVolume(delta: Float(-value.translation.height) / 80)
             }
             .onEnded { value in
                 guard !vm.locked else { return }
@@ -86,11 +83,13 @@ struct ContentView: View {
                 let dy = value.translation.height
                 let sx = value.startLocation.x
                 if abs(dx) > abs(dy), abs(dx) > 40 {
+                    // 左右滑切换线路（左右两侧区域）
                     if sx < w * 0.35 || sx > w * 0.65 {
                         if dx > 0 { vm.switchSource(direction: -1) }
                         else { vm.switchSource(direction: 1) }
                     }
                 } else if abs(dy) > abs(dx), abs(dy) > 40 {
+                    // 中间上下滑切换频道
                     if sx >= w * 0.35 && sx <= w * 0.65 {
                         if dy < 0 { vm.nextChannel() }
                         else { vm.prevChannel() }
