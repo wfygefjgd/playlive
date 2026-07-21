@@ -72,8 +72,8 @@ struct ContentView: View {
 
     // MARK: - Gestures
     private var tapGesture: some Gesture {
-        SpatialTapGesture(count: 1)
-            .onEnded { _ in vm.onTap() }
+        TapGesture(count: 1)
+            .onEnded { vm.onTap() }
     }
 
     private var horizontalDrag: some Gesture {

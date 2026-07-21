@@ -76,11 +76,11 @@ class M3UParserService {
     private static func stripTrailingNoise(_ value: String) -> String {
         var w = value
         while true {
-            if let m = trailingPattern.firstMatch(in: w) {
-                w = String(w[..<m.startIndex])
-            } else {
-                break
-            }
+            guard let m = trailingPattern.firstMatchResult(in: w) else { break }
+            let nsRange = m.range(at: 0)
+            guard nsRange.location != NSNotFound else { break }
+            let start = w.index(w.startIndex, offsetBy: nsRange.location)
+            w = String(w[..<start])
         }
         return w
     }
@@ -88,12 +88,14 @@ class M3UParserService {
 
 // MARK: - Regex helpers
 private extension NSRegularExpression {
-    func firstMatch(in string: String) -> [String]? {
+    func firstMatch(in string: String) -> String? {
         let range = NSRange(location: 0, length: string.utf16.count)
         guard let m = firstMatch(in: string, range: range) else { return nil }
-        return (0..<m.numberOfRanges).map { i in
-            (string as NSString).substring(with: m.range(at: i))
-        }
+        return (string as NSString).substring(with: m.range(at: 1))
+    }
+    func firstMatchResult(in string: String) -> NSTextCheckingResult? {
+        let range = NSRange(location: 0, length: string.utf16.count)
+        return firstMatch(in: string, range: range)
     }
 }
 

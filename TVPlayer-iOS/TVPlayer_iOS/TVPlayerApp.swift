@@ -9,7 +9,6 @@ struct TVPlayerApp: App {
             ContentView()
                 .environmentObject(vm)
                 .preferredColorScheme(.dark)
-                .persistentSystemOverrides(.hidden)
                 .statusBarHidden(true)
         }
     }
