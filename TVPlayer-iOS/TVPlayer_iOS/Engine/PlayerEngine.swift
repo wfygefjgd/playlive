@@ -107,18 +107,18 @@ final class PlayerEngine: ObservableObject {
             .store(in: &cancellables)
     }
 
-    /// 卡顿 2s 后复查，仍慢再等 2s 确认后回调
+    /// 卡顿 3s 后复查，仍慢再等 3s 确认后回调
     private func startBufferTask() {
         guard bufferTask == nil else { return }
         bufferTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
             guard !Task.isCancelled else { return }
             let stillSlow = await MainActor.run { self?.isBufferingSlow ?? false }
             guard stillSlow, !Task.isCancelled else {
                 await MainActor.run { self?.cancelBufferTask() }
                 return
             }
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self else { return }

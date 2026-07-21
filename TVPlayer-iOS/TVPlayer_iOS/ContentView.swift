@@ -14,17 +14,14 @@ struct ContentView: View {
                 VideoPlayerView()
                     .frame(width: w, height: h)
                     .background(Color.black)
-                    .allowsHitTesting(!vm.panelVisible)
-                    .onTapGesture {
-                        guard !vm.panelVisible else { return }
-                        vm.showFloat()
-                    }
+                    .allowsHitTesting(false)
 
+                // 面板关闭时：单击显示隐藏/锁定按钮；拖拽调节音量/换台/换线
                 if !vm.panelVisible {
                     Color.clear
                         .contentShape(Rectangle())
-                        .gesture(playerDragGesture(screenWidth: w))
-                        .allowsHitTesting(!vm.locked)
+                        .onTapGesture { vm.showFloat() }
+                        .simultaneousGesture(playerDragGesture(screenWidth: w))
                 }
 
                 if vm.panelVisible && !vm.locked {
