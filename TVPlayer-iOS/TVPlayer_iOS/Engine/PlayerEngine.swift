@@ -1,16 +1,16 @@
 import AVKit
 import Combine
 
-/// 方案 A：起播超时 + 播放中连续卡顿 + 开播保护
+/// 起播给足时间；只有真正长时间无画面/卡死才回调切换
 final class PlayerEngine: ObservableObject {
-    /// 起播超时：给线路足够握手时间，避免一切就失败
-    static let startupTimeoutNs: UInt64 = 12_000_000_000
-    /// 播放中连续卡顿阈值
-    static let stallTimeoutNs: UInt64 = 6_000_000_000
-    /// ready 后保护期
-    static let readyProtectNs: UInt64 = 2_000_000_000
-    /// 起播后至少等待再响应 error（避免秒切）
-    static let errorGraceNs: UInt64 = 3_000_000_000
+    /// 起播超时：一般频道有时间加载
+    static let startupTimeoutNs: UInt64 = 20_000_000_000
+    /// 播放中连续卡顿才切
+    static let stallTimeoutNs: UInt64 = 12_000_000_000
+    /// ready 后保护期：刚出画面不要因缓冲误切
+    static let readyProtectNs: UInt64 = 8_000_000_000
+    /// error 至少等这么久再报失败
+    static let errorGraceNs: UInt64 = 10_000_000_000
 
     let player = AVPlayer()
     private var cancellables = Set<AnyCancellable>()
@@ -23,6 +23,7 @@ final class PlayerEngine: ObservableObject {
     private var stallWatchEnabled = false
     private var continuousStall = false
     private var playStartedAt: Date?
+    private var hasRendered = false
 
     @Published var isReady = false
     @Published var isPlaying = false
@@ -46,13 +47,15 @@ final class PlayerEngine: ObservableObject {
         statusObserver?.invalidate()
         stallWatchEnabled = false
         continuousStall = false
+        hasRendered = false
         playStartedAt = Date()
 
         let asset = AVURLAsset(url: url, options: [
             AVURLAssetPreferPreciseDurationAndTimingKey: false
         ])
         let item = AVPlayerItem(asset: asset)
-        item.preferredForwardBufferDuration = 3
+        // 给直播多一点缓冲，减少刚出画就卡死
+        item.preferredForwardBufferDuration = 6
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
         player.automaticallyWaitsToMinimizeStalling = true
         player.replaceCurrentItem(with: item)
@@ -75,7 +78,7 @@ final class PlayerEngine: ObservableObject {
         }
 
         scheduleStartupTimeout(token: token)
-        player.playImmediately(atRate: 1.0)
+        player.play()
     }
 
     func pause() {
@@ -99,6 +102,7 @@ final class PlayerEngine: ObservableObject {
         isReady = false
         stallWatchEnabled = false
         continuousStall = false
+        hasRendered = false
     }
 
     var volume: Float {
@@ -114,11 +118,11 @@ final class PlayerEngine: ObservableObject {
         errorGraceTask?.cancel()
         errorGraceTask = nil
         isReady = true
-        if player.rate == 0 {
-            player.playImmediately(atRate: 1.0)
-        }
+        hasRendered = true
+        player.play()
         isPlaying = true
         onReady?()
+        // 刚出画面：长时间保护，避免「画面刚出来就切走」
         stallWatchEnabled = false
         protectTask?.cancel()
         protectTask = Task { [weak self] in
@@ -131,18 +135,19 @@ final class PlayerEngine: ObservableObject {
         }
     }
 
-    /// error 至少等 grace 秒，避免一切台就秒切线路
     private func scheduleErrorAfterGrace(token: Int) {
         errorGraceTask?.cancel()
         let elapsed = playStartedAt.map { Date().timeIntervalSince($0) } ?? 0
         let remain = max(0, Double(Self.errorGraceNs) / 1e9 - elapsed)
         errorGraceTask = Task { [weak self] in
             if remain > 0 {
-                try? await Task.sleep(nanoseconds: UInt64(remain * 1e9))
+                try? await Task.sleep(nanoseconds: UInt64(remain * 1_000_000_000))
             }
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                guard let self, self.playToken == token, !self.isReady else { return }
+                guard let self, self.playToken == token else { return }
+                // 已经出过画面则交给卡顿逻辑，不因瞬时 error 秒切
+                if self.hasRendered || self.isReady { return }
                 self.cancelAllWatchers()
                 self.onError?()
             }
@@ -155,14 +160,16 @@ final class PlayerEngine: ObservableObject {
             try? await Task.sleep(nanoseconds: Self.startupTimeoutNs)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                guard let self, self.playToken == token, !self.isReady else { return }
+                guard let self, self.playToken == token else { return }
+                // 已 ready / 已出画：不因超时切
+                if self.isReady || self.hasRendered { return }
                 self.cancelAllWatchers()
                 self.onStartupTimeout?()
             }
         }
     }
 
-    // MARK: - Stall (only after protect)
+    // MARK: - Stall
 
     private func observeTimeControl() {
         player.publisher(for: \.timeControlStatus)
@@ -177,7 +184,7 @@ final class PlayerEngine: ObservableObject {
 
     private func handleTimeControl(_ status: AVPlayer.TimeControlStatus) {
         guard stallWatchEnabled, isReady else {
-            if status == .playing || status == .paused {
+            if status == .playing {
                 stopStallTimer()
             }
             return
@@ -188,19 +195,15 @@ final class PlayerEngine: ObservableObject {
         case .playing:
             stopStallTimer()
         case .paused:
+            // 用户暂停不算卡顿
             stopStallTimer()
         @unknown default:
             break
         }
-
-        // 缓冲空也视为卡顿信号
-        if let item = player.currentItem, item.isPlaybackBufferEmpty, status != .playing {
-            beginStallTimerIfNeeded()
-        }
     }
 
     private func beginStallTimerIfNeeded() {
-        guard continuousStall == false else { return }
+        guard !continuousStall else { return }
         continuousStall = true
         let token = playToken
         stallTask?.cancel()
@@ -209,10 +212,10 @@ final class PlayerEngine: ObservableObject {
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self, self.playToken == token, self.stallWatchEnabled else { return }
-                // 仍在 waiting 或 buffer 空
                 let waiting = self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-                let empty = self.player.currentItem?.isPlaybackBufferEmpty == true
-                guard waiting || empty else {
+                let rateZero = self.player.rate == 0
+                // 必须仍在 waiting 且 rate=0，避免「能播但缓冲中」误切
+                guard waiting, rateZero else {
                     self.continuousStall = false
                     return
                 }
