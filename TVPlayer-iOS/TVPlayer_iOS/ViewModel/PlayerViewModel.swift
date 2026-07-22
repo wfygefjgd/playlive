@@ -6,7 +6,6 @@ let DEFAULT_SOURCE_URL = "https://ghproxy.net/https://raw.githubusercontent.com/
 private let CHANNEL_OSD_MS: UInt64 = 2_500_000_000
 private let FLOAT_HIDE_MS: UInt64 = 2_500_000_000
 private let INDICATOR_MS: UInt64 = 1_200_000_000
-/// 自动切线冷却（方案 A）
 private let AUTO_SWITCH_COOLDOWN_NS: UInt64 = 4_000_000_000
 
 let PRESET_SOURCES: [(name: String, url: String)] = [
@@ -16,6 +15,12 @@ let PRESET_SOURCES: [(name: String, url: String)] = [
     ("vbskycn", "https://raw.githubusercontent.com/vbskycn/iptv/master/tv/tv.m3u"),
     ("fanmingming", "https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv6.m3u"),
 ]
+
+private enum AutoSwitchState {
+    case idle
+    case switching
+    case cooldown
+}
 
 @MainActor
 final class PlayerViewModel: ObservableObject {
@@ -29,25 +34,26 @@ final class PlayerViewModel: ObservableObject {
     @Published var channelOSD: String = ""
     @Published var indicatorText: String = ""
     @Published var showFloatOverlay = false
+    @Published var favorites: Set<String> = []
 
     let player = PlayerEngine()
     private let storage = StorageService()
     private var rawChannels: [Channel] = []
     var sourceUrls: [String] = []
     var activeSourceUrl = DEFAULT_SOURCE_URL
-    private var autoSwitching = false
-    private var autoSwitchCooldown = false
+    private var autoSwitchState: AutoSwitchState = .idle
     private var started = false
-    /// 当前频道已自动试过的线路下标（一轮试完后停止）
     private var triedLineIndices = Set<Int>()
     private var osdTask: Task<Void, Never>?
     private var indTask: Task<Void, Never>?
     private var floatTask: Task<Void, Never>?
     private var cooldownTask: Task<Void, Never>?
+    private var lastVolumeTranslation: CGFloat = 0
 
     func startup() {
         guard !started else { return }
         started = true
+        favorites = storage.loadFavorites()
 
         player.onReady = { [weak self] in
             Task { @MainActor in self?.onPlayerReady() }
@@ -66,14 +72,13 @@ final class PlayerViewModel: ObservableObject {
         let cached = applyRules(storage.loadChannels())
         if !cached.isEmpty {
             channels = cached
-            currentIndex = 0
-            currentSourceIndex = 0
-            playCurrent(showOSD: false)
+            restoreLastChannelPosition()
+            playCurrent(showOSD: false, resetTried: true)
+            loadChannels(force: true, silent: true)
+        } else {
+            loadChannels(force: true, silent: false)
         }
-        loadChannels(force: cached.isEmpty)
     }
-
-    // MARK: - Sources
 
     func restoreSources() {
         var urls = OrderedDictionary<String, Bool>()
@@ -113,10 +118,12 @@ final class PlayerViewModel: ObservableObject {
         rawChannels = []
         currentIndex = 0
         currentSourceIndex = 0
+        triedLineIndices.removeAll()
+        autoSwitchState = .idle
         player.stop()
-        indicatorText = "正在切换源..."
+        showIndicator("正在切换源...")
         showFloat()
-        loadChannels(force: true)
+        loadChannels(force: true, silent: false)
     }
 
     func deleteSourceUrl(_ url: String) {
@@ -135,34 +142,49 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Load
-
-    func loadChannels(force: Bool = true) {
-        guard !player.isReady || force else { return }
-        indicatorText = "加载中..."
+    func loadChannels(force: Bool = true, silent: Bool = false) {
+        if !force && !channels.isEmpty { return }
+        if !silent { indicatorText = "加载中..." }
         let urls = buildCandidates()
         Task {
-            let loaded = await NetworkService.shared.fetchWithCandidates(urls: urls)
-            await MainActor.run { onChannelsLoaded(loaded) }
+            let result = await NetworkService.shared.fetchWithCandidates(urls: urls)
+            await MainActor.run {
+                onChannelsLoaded(result.channels, errorMessage: result.errorMessage, silent: silent)
+            }
         }
     }
 
-    private func onChannelsLoaded(_ loaded: [Channel]) {
+    private func onChannelsLoaded(_ loaded: [Channel], errorMessage: String?, silent: Bool) {
         guard !loaded.isEmpty else {
-            showIndicator(channels.isEmpty ? "加载失败" : "刷新失败")
+            if !silent {
+                showIndicator(errorMessage ?? (channels.isEmpty ? "加载失败" : "刷新失败"))
+            }
             return
         }
+        let prevKey = currentChannel?.key
         rawChannels = loaded.map { Channel(name: $0.name, group: $0.group, key: $0.key, urls: $0.urls) }
         channels = applyRules(rawChannels)
         guard !channels.isEmpty else {
-            showIndicator("加载失败")
+            if !silent { showIndicator("加载失败") }
             return
         }
         storage.saveChannels(loaded)
-        showIndicator("已加载 \(channels.count) 个频道")
-        currentIndex = min(currentIndex, channels.count - 1)
-        currentSourceIndex = 0
-        playCurrent(showOSD: false)
+
+        if let prevKey, let idx = channels.firstIndex(where: { $0.key == prevKey }) {
+            currentIndex = idx
+            currentSourceIndex = min(currentSourceIndex, max(0, channels[idx].sourceCount - 1))
+        } else {
+            restoreLastChannelPosition()
+        }
+
+        if silent {
+            if !player.isReady {
+                playCurrent(showOSD: false, resetTried: true)
+            }
+        } else {
+            showIndicator("已加载 \(channels.count) 个频道")
+            playCurrent(showOSD: false, resetTried: true)
+        }
     }
 
     func buildCandidates() -> [String] {
@@ -173,7 +195,22 @@ final class PlayerViewModel: ObservableObject {
         return candidates
     }
 
-    // MARK: - Rules
+    private func restoreLastChannelPosition() {
+        let key = storage.loadLastChannelKey()
+        if !key.isEmpty, let idx = channels.firstIndex(where: { $0.key == key }) {
+            currentIndex = idx
+            let si = storage.loadLastSourceIndex()
+            currentSourceIndex = min(max(0, si), max(0, channels[idx].sourceCount - 1))
+        } else {
+            currentIndex = 0
+            currentSourceIndex = 0
+        }
+    }
+
+    private func persistLastChannel() {
+        guard let ch = currentChannel else { return }
+        storage.saveLastChannel(key: ch.key, sourceIndex: currentSourceIndex)
+    }
 
     func applyRules(_ input: [Channel]) -> [Channel] {
         input.compactMap { src in
@@ -196,7 +233,48 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Current
+    struct ChannelSection: Identifiable {
+        let id: String
+        let title: String
+        let channels: [Channel]
+    }
+
+    func sections(search: String) -> [ChannelSection] {
+        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+        let list: [Channel] = q.isEmpty
+            ? channels
+            : channels.filter { $0.name.lowercased().contains(q) || $0.group.lowercased().contains(q) }
+        var result: [ChannelSection] = []
+        let favs = list.filter { favorites.contains($0.key) }
+        if !favs.isEmpty {
+            result.append(ChannelSection(id: "__fav__", title: "收藏", channels: favs))
+        }
+        var order: [String] = []
+        var map: [String: [Channel]] = [:]
+        for ch in list {
+            if map[ch.group] == nil {
+                order.append(ch.group)
+                map[ch.group] = []
+            }
+            map[ch.group]?.append(ch)
+        }
+        for g in order {
+            if let arr = map[g], !arr.isEmpty {
+                result.append(ChannelSection(id: g, title: g, channels: arr))
+            }
+        }
+        return result
+    }
+
+    func toggleFavorite(for ch: Channel) {
+        let on = storage.toggleFavorite(ch.key)
+        favorites = storage.loadFavorites()
+        showIndicator(on ? "已收藏 \(ch.name)" : "已取消收藏")
+    }
+
+    func isFavorite(_ ch: Channel) -> Bool {
+        favorites.contains(ch.key)
+    }
 
     var currentChannel: Channel? {
         guard !channels.isEmpty, channels.indices.contains(currentIndex) else { return nil }
@@ -208,51 +286,36 @@ final class PlayerViewModel: ObservableObject {
         return ch.urls[currentSourceIndex]
     }
 
-    // MARK: - Play
-
     func playCurrent(showOSD: Bool = true, resetTried: Bool = false) {
         guard currentChannel != nil, let url = currentUrl, let u = URL(string: url) else {
             showIndicator("当前频道地址无效")
             return
         }
-        if resetTried {
-            triedLineIndices.removeAll()
-        }
+        if resetTried { triedLineIndices.removeAll() }
         triedLineIndices.insert(currentSourceIndex)
-        autoSwitching = false
+        if autoSwitchState != .cooldown { autoSwitchState = .idle }
         player.play(url: u)
+        persistLastChannel()
         if showOSD { showChannelOSD() }
         showFloat()
     }
 
     private func onPlayerReady() {
-        autoSwitching = false
+        if autoSwitchState == .switching { autoSwitchState = .idle }
         scheduleHideFloat()
-        if !indicatorText.isEmpty {
-            showIndicator("")
-        }
+        if !indicatorText.isEmpty { showIndicator("") }
     }
 
-    private func onPlayerError() {
-        autoSwitchLine(hint: "线路失败，切换下一线路")
-    }
+    private func onPlayerError() { autoSwitchLine(hint: "线路失败，切换下一线路") }
+    private func onStartupTimeout() { autoSwitchLine(hint: "线路超时，切换下一线路") }
+    private func onPlaybackStall() { autoSwitchLine(hint: "网络卡顿，切换下一线路") }
 
-    private func onStartupTimeout() {
-        autoSwitchLine(hint: "线路超时，切换下一线路")
-    }
-
-    private func onPlaybackStall() {
-        autoSwitchLine(hint: "网络卡顿，切换下一线路")
-    }
-
-    /// 方案 A：自动切线（冷却 + 同频道一轮试完即停）
     private func autoSwitchLine(hint: String) {
-        guard !locked, !autoSwitching, !autoSwitchCooldown else { return }
+        guard !locked, autoSwitchState == .idle else { return }
         guard let ch = currentChannel, ch.sourceCount > 1 else {
             showIndicator(hint)
             return
         }
-        // 找尚未试过的下一线路
         var nxt = (currentSourceIndex + 1) % ch.sourceCount
         var scanned = 0
         while triedLineIndices.contains(nxt), scanned < ch.sourceCount {
@@ -260,39 +323,35 @@ final class PlayerViewModel: ObservableObject {
             scanned += 1
         }
         if scanned >= ch.sourceCount || triedLineIndices.count >= ch.sourceCount {
-            autoSwitching = false
+            autoSwitchState = .idle
             showIndicator("当前频道线路均不可用")
             return
         }
-        autoSwitching = true
-        autoSwitchCooldown = true
+        autoSwitchState = .switching
         currentSourceIndex = nxt
         showIndicator(hint)
         playCurrent(showOSD: true, resetTried: false)
-        startCooldown()
+        beginCooldown()
     }
 
-    private func startCooldown() {
+    private func beginCooldown() {
+        autoSwitchState = .cooldown
         cooldownTask?.cancel()
         cooldownTask = Task {
             try? await Task.sleep(nanoseconds: AUTO_SWITCH_COOLDOWN_NS)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                autoSwitchCooldown = false
-                autoSwitching = false
+                if autoSwitchState == .cooldown { autoSwitchState = .idle }
             }
         }
     }
-
-    // MARK: - Navigation
 
     func nextChannel() {
         guard !locked, !channels.isEmpty else { return }
         currentIndex = (currentIndex + 1) % channels.count
         currentSourceIndex = 0
         panelVisible = false
-        triedLineIndices.removeAll()
-        autoSwitchCooldown = false
+        autoSwitchState = .idle
         playCurrent(resetTried: true)
     }
 
@@ -301,8 +360,16 @@ final class PlayerViewModel: ObservableObject {
         currentIndex = (currentIndex - 1 + channels.count) % channels.count
         currentSourceIndex = 0
         panelVisible = false
-        triedLineIndices.removeAll()
-        autoSwitchCooldown = false
+        autoSwitchState = .idle
+        playCurrent(resetTried: true)
+    }
+
+    func selectChannel(_ ch: Channel) {
+        guard let idx = channels.firstIndex(where: { $0.key == ch.key }) else { return }
+        currentIndex = idx
+        currentSourceIndex = 0
+        panelVisible = false
+        autoSwitchState = .idle
         playCurrent(resetTried: true)
     }
 
@@ -314,18 +381,12 @@ final class PlayerViewModel: ObservableObject {
             }
             return
         }
-        // 手动切线：重置已试集合与冷却
-        triedLineIndices.removeAll()
-        autoSwitchCooldown = false
+        autoSwitchState = .idle
         currentSourceIndex = (currentSourceIndex + direction + ch.sourceCount) % ch.sourceCount
         playCurrent(resetTried: true)
     }
 
-    func switchNextLine(hint: String) {
-        autoSwitchLine(hint: hint)
-    }
-
-    // MARK: - OSD / Indicator
+    func switchNextLine(hint: String) { autoSwitchLine(hint: hint) }
 
     func showChannelOSD() {
         guard let ch = currentChannel else { return }
@@ -353,8 +414,6 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Float
-
     func showFloat() {
         showFloatOverlay = true
         cancelHideFloat()
@@ -376,11 +435,7 @@ final class PlayerViewModel: ObservableObject {
         floatTask = nil
     }
 
-    func hideFloat() {
-        showFloatOverlay = false
-    }
-
-    // MARK: - Actions
+    func hideFloat() { showFloatOverlay = false }
 
     func togglePanel() {
         guard !locked else { return }
@@ -401,12 +456,17 @@ final class PlayerViewModel: ObservableObject {
     func pause() { player.pause() }
     func resume() { player.resume() }
 
-    func adjustVolume(delta: Float) {
-        player.volume = max(0, min(1, player.volume + delta))
+    func handleVolumeDrag(translationHeight: CGFloat, ended: Bool) {
+        if ended {
+            lastVolumeTranslation = 0
+            return
+        }
+        let deltaY = translationHeight - lastVolumeTranslation
+        lastVolumeTranslation = translationHeight
+        VolumeHelper.adjust(by: Float(-deltaY) / 200)
+        showIndicator("音量 \(Int(VolumeHelper.current * 100))%")
         showFloat()
     }
-
-    // MARK: - Delete line
 
     func confirmDeleteLine() {
         guard currentUrl != nil else { return }
@@ -419,10 +479,8 @@ final class PlayerViewModel: ObservableObject {
         let targetKey = ch.key
         let nextIdx = ch.sourceCount <= 1 ? -1 : currentSourceIndex
         let oldIdx = currentIndex
-
         let source = rawChannels.isEmpty ? channels : rawChannels
         channels = applyRules(source)
-
         guard !channels.isEmpty else {
             player.stop()
             currentIndex = 0
@@ -430,7 +488,6 @@ final class PlayerViewModel: ObservableObject {
             showIndicator("线路已删除")
             return
         }
-
         if let found = channels.firstIndex(where: { $0.key == targetKey }) {
             currentIndex = found
             let updated = channels[found]
@@ -444,31 +501,6 @@ final class PlayerViewModel: ObservableObject {
             currentSourceIndex = 0
         }
         showIndicator("已删除当前线路")
-        playCurrent()
-    }
-}
-
-// MARK: - Ordered Dictionary
-
-struct OrderedDictionary<Key: Hashable, Value> {
-    private var _keys: [Key] = []
-    private var dict: [Key: Value] = [:]
-
-    var keys: [Key] { _keys }
-    var values: [Value] { _keys.compactMap { dict[$0] } }
-
-    subscript(key: Key) -> Value? {
-        get { dict[key] }
-        set {
-            if newValue == nil {
-                dict.removeValue(forKey: key)
-                _keys.removeAll { $0 == key }
-            } else if dict[key] == nil {
-                _keys.append(key)
-                dict[key] = newValue
-            } else {
-                dict[key] = newValue
-            }
-        }
+        playCurrent(resetTried: true)
     }
 }

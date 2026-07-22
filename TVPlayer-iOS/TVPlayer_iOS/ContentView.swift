@@ -16,7 +16,6 @@ struct ContentView: View {
                     .background(Color.black)
                     .allowsHitTesting(false)
 
-                // 面板关闭时：单击显示隐藏/锁定按钮；拖拽调节音量/换台/换线
                 if !vm.panelVisible {
                     Color.clear
                         .contentShape(Rectangle())
@@ -44,7 +43,7 @@ struct ContentView: View {
                     .allowsHitTesting(false)
                     .zIndex(5)
 
-                if vm.showFloatOverlay {
+                if vm.showFloatOverlay || vm.locked {
                     floatingButtons
                         .zIndex(60)
                 }
@@ -90,13 +89,16 @@ struct ContentView: View {
                 let sx = value.startLocation.x
                 let vertical = abs(value.translation.height) >= abs(value.translation.width)
                 guard vertical, sx > w * 0.65 else { return }
-                vm.adjustVolume(delta: Float(-value.translation.height) / 80)
+                vm.handleVolumeDrag(translationHeight: value.translation.height, ended: false)
             }
             .onEnded { value in
                 guard !vm.locked, !vm.panelVisible else { return }
+                let sx = value.startLocation.x
+                if sx > w * 0.65 {
+                    vm.handleVolumeDrag(translationHeight: value.translation.height, ended: true)
+                }
                 let dx = value.translation.width
                 let dy = value.translation.height
-                let sx = value.startLocation.x
                 if abs(dx) > abs(dy), abs(dx) > 40 {
                     if sx < w * 0.35 || sx > w * 0.65 {
                         if dx > 0 { vm.switchSource(direction: -1) }

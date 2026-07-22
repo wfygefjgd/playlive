@@ -1,6 +1,6 @@
 import Foundation
 
-class StorageService {
+final class StorageService {
     private let defaults = UserDefaults.standard
 
     private let kChannels = "channels_cache"
@@ -9,6 +9,8 @@ class StorageService {
     private let kCustomSource = "custom_source_url"
     private let kHiddenLines = "hidden_lines"
     private let kFavorites = "favorites"
+    private let kLastChannelKey = "last_channel_key"
+    private let kLastSourceIndex = "last_source_index"
 
     func saveChannels(_ channels: [Channel]) {
         guard let data = try? JSONEncoder().encode(channels) else { return }
@@ -86,5 +88,18 @@ class StorageService {
 
     func isFavorite(_ key: String) -> Bool {
         loadFavorites().contains(key)
+    }
+
+    func saveLastChannel(key: String, sourceIndex: Int) {
+        defaults.set(key, forKey: kLastChannelKey)
+        defaults.set(sourceIndex, forKey: kLastSourceIndex)
+    }
+
+    func loadLastChannelKey() -> String {
+        defaults.string(forKey: kLastChannelKey) ?? ""
+    }
+
+    func loadLastSourceIndex() -> Int {
+        defaults.integer(forKey: kLastSourceIndex)
     }
 }
