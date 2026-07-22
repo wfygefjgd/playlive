@@ -330,8 +330,12 @@ final class PlayerViewModel: ObservableObject {
         if autoSwitchState == .switching { return }
         if autoSwitchState == .cooldown { return }
 
-        guard let ch = currentChannel, ch.sourceCount > 1 else {
-            showIndicator(ch == nil ? hint : "当前频道只有一条线路")
+        guard let ch = currentChannel else {
+            showIndicator(hint)
+            return
+        }
+        guard ch.sourceCount > 1 else {
+            showIndicator("当前频道只有一条线路")
             return
         }
 
