@@ -3,8 +3,8 @@ import Combine
 
 /// 方案 A：起播超时 + 播放中连续卡顿 + 开播保护
 final class PlayerEngine: ObservableObject {
-    /// 起播超时（秒）
-    static let startupTimeoutNs: UInt64 = 10_000_000_000
+    /// 起播超时
+    static let startupTimeoutNs: UInt64 = 8_000_000_000
     /// 播放中连续卡顿阈值
     static let stallTimeoutNs: UInt64 = 6_000_000_000
     /// ready 后保护期，避免刚起播误切
@@ -45,7 +45,17 @@ final class PlayerEngine: ObservableObject {
         stallWatchEnabled = false
         continuousStall = false
 
-        let item = AVPlayerItem(url: url)
+        // 直播：减小前向缓冲，加快出首帧
+        let asset = AVURLAsset(url: url, options: [
+            AVURLAssetPreferPreciseDurationAndTimingKey: false
+        ])
+        let item = AVPlayerItem(asset: asset)
+        item.preferredForwardBufferDuration = 2
+        item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+        if #available(iOS 15.0, *) {
+            item.preferredPeakBitRate = 0
+        }
+        player.automaticallyWaitsToMinimizeStalling = false
         player.replaceCurrentItem(with: item)
         isReady = false
         isPlaying = true
@@ -67,7 +77,8 @@ final class PlayerEngine: ObservableObject {
         }
 
         scheduleStartupTimeout(token: token)
-        player.play()
+        // 不等 ready 再 play，尽早拉流
+        player.playImmediately(atRate: 1.0)
     }
 
     func pause() {
@@ -104,7 +115,9 @@ final class PlayerEngine: ObservableObject {
         guard playToken == token else { return }
         cancelStartup()
         isReady = true
-        player.play()
+        if player.rate == 0 {
+            player.playImmediately(atRate: 1.0)
+        }
         isPlaying = true
         onReady?()
         // 开播保护后再允许卡顿检测

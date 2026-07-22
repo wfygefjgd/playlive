@@ -69,14 +69,16 @@ final class PlayerViewModel: ObservableObject {
         }
 
         restoreSources()
+        // 尽快出画面：有缓存立刻播，无缓存只拉当前源（不串行试全部源）
         let cached = applyRules(storage.loadChannels())
         if !cached.isEmpty {
             channels = cached
             restoreLastChannelPosition()
             playCurrent(showOSD: false, resetTried: true)
-            loadChannels(force: true, silent: true)
+            loadChannels(force: true, silent: true, preferActiveOnly: false)
         } else {
-            loadChannels(force: true, silent: false)
+            showIndicator("加载中...")
+            loadChannels(force: true, silent: false, preferActiveOnly: true)
         }
     }
 
@@ -142,12 +144,16 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
-    func loadChannels(force: Bool = true, silent: Bool = false) {
+    func loadChannels(force: Bool = true, silent: Bool = false, preferActiveOnly: Bool = false) {
         if !force && !channels.isEmpty { return }
         if !silent { indicatorText = "加载中..." }
-        let urls = buildCandidates()
+        let urls = preferActiveOnly ? [activeSourceUrl] : buildCandidates()
         Task {
-            let result = await NetworkService.shared.fetchWithCandidates(urls: urls)
+            var result = await NetworkService.shared.fetchWithCandidates(urls: urls)
+            // 仅当前源失败时再扩到全部候选
+            if result.channels.isEmpty, preferActiveOnly {
+                result = await NetworkService.shared.fetchWithCandidates(urls: buildCandidates())
+            }
             await MainActor.run {
                 onChannelsLoaded(result.channels, errorMessage: result.errorMessage, silent: silent)
             }
