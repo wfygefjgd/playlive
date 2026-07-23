@@ -37,8 +37,6 @@ final class PlayerViewModel: ObservableObject {
     @Published var favorites: Set<String> = []
     @Published var isBootstrapping = false
     @Published var bootstrapMessage = "正在连接网络..."
-    /// 播放就绪/回前台时递增，驱动 SwiftUI 刷新播放层布局
-    @Published var playerLayoutEpoch: Int = 0
 
     let player = PlayerEngine()
     private let storage = StorageService()
@@ -152,8 +150,6 @@ final class PlayerViewModel: ObservableObject {
     }
 
     func onAppBecameActive() {
-        playerLayoutEpoch &+= 1
-        NotificationCenter.default.post(name: .tvPlayerNeedsRelayout, object: nil)
         if channels.isEmpty {
             retryLoadSources()
         }
@@ -473,9 +469,6 @@ final class PlayerViewModel: ObservableObject {
         autoSwitchState = .idle
         scheduleHideFloat()
         if !indicatorText.isEmpty { showIndicator("") }
-        // 首次布局 window/safeArea 常晚于起播；回前台会 relayout，这里主动补一次
-        playerLayoutEpoch &+= 1
-        NotificationCenter.default.post(name: .tvPlayerNeedsRelayout, object: nil)
     }
 
     private func onPlayerError() { autoSwitchLine(hint: "线路失败，切换下一线路") }
@@ -655,11 +648,7 @@ final class PlayerViewModel: ObservableObject {
     }
 
     func pause() { player.pause() }
-    func resume() {
-        player.resume()
-        playerLayoutEpoch &+= 1
-        NotificationCenter.default.post(name: .tvPlayerNeedsRelayout, object: nil)
-    }
+    func resume() { player.resume() }
 
     func handleVolumeDrag(translationHeight: CGFloat, ended: Bool) {
         if ended {
