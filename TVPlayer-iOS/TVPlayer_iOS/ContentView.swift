@@ -8,9 +8,10 @@ struct ContentView: View {
         ZStack {
             Color.black.ignoresSafeArea(.all)
 
+            // 无固定宽高：铺满 ZStack，视频 contain 等比贴边
             VideoPlayerView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea(.all)
-                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
                 .allowsHitTesting(false)
 
             if !vm.panelVisible {
