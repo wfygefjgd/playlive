@@ -16,7 +16,9 @@ struct TVPlayerApp: App {
                 .environmentObject(vm)
                 .preferredColorScheme(.dark)
                 .statusBarHidden(true)
+                // 尽量隐藏底部 Home 指示条占用的视觉空白
                 .persistentSystemOverlays(.hidden)
+                .ignoresSafeArea(.all, edges: .all)
         }
     }
 }

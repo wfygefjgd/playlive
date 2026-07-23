@@ -2,7 +2,8 @@ import SwiftUI
 import AVKit
 import UIKit
 
-/// 方案 C 加强：layer 与视图同大 + resize 拉伸，强制铺满容器（可变形，无黑边）
+/// 播放层强制盖住整个 UIWindow（含顶部刘海区、底部 Home 条区域）。
+/// videoGravity = resize：在「真全屏矩形」上拉伸铺满。
 final class PlayerContainerView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
 
@@ -12,7 +13,7 @@ final class PlayerContainerView: UIView {
         get { playerLayer.player }
         set {
             playerLayer.player = newValue
-            applyStretch()
+            applyVideoStyle()
         }
     }
 
@@ -20,10 +21,11 @@ final class PlayerContainerView: UIView {
         super.init(frame: frame)
         backgroundColor = .black
         isOpaque = true
-        clipsToBounds = true
+        // 允许 layer 画到 safe area / 视图边界之外
+        clipsToBounds = false
         isUserInteractionEnabled = false
         autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        applyStretch()
+        applyVideoStyle()
     }
 
     required init?(coder: NSCoder) {
@@ -31,24 +33,33 @@ final class PlayerContainerView: UIView {
     }
 
     override var intrinsicContentSize: CGSize {
-        // 不报告小固有尺寸，避免被压成中间一块
         CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
     }
 
-    private func applyStretch() {
+    private func applyVideoStyle() {
         playerLayer.videoGravity = .resize
         playerLayer.backgroundColor = UIColor.black.cgColor
         playerLayer.masksToBounds = true
     }
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
+    /// 把 layer 对齐到整个 window（吃掉 top/bottom safe area）
+    private func layoutPlayerLayerToWindow() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        // layerClass 就是 AVPlayerLayer，frame 跟随 bounds 即可
-        playerLayer.frame = bounds
+        if let window = window {
+            // window 坐标系全屏 → 本 view 坐标系
+            let full = window.convert(window.bounds, to: self)
+            playerLayer.frame = full
+        } else {
+            playerLayer.frame = bounds
+        }
         playerLayer.videoGravity = .resize
         CATransaction.commit()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layoutPlayerLayerToWindow()
     }
 
     override func didMoveToWindow() {
@@ -75,26 +86,20 @@ struct VideoPlayerView: UIViewRepresentable {
         if uiView.player !== vm.player.player {
             uiView.player = vm.player.player
         }
-        uiView.playerLayer.videoGravity = .resize
         uiView.setNeedsLayout()
     }
 
-    /// 按父布局（或整屏）尺寸撑满
     func sizeThatFits(
         _ proposal: ProposedViewSize,
         uiView: PlayerContainerView,
         context: Context
     ) -> CGSize? {
-        let screen = UIScreen.main.bounds.size
-        // 横屏时取较大边为宽
-        let sw = max(screen.width, screen.height)
-        let sh = min(screen.width, screen.height)
-        let w = proposal.width ?? sw
-        let h = proposal.height ?? sh
-        // 若提议尺寸明显小于屏幕，仍用屏幕，避免被安全区裁成“四周黑框”
-        return CGSize(
-            width: max(w, sw * 0.98, 1),
-            height: max(h, sh * 0.98, 1)
-        )
+        // 始终按物理屏（横屏：宽=长边，高=短边）
+        let b = UIScreen.main.bounds
+        let sw = max(b.width, b.height)
+        let sh = min(b.width, b.height)
+        let w = max(proposal.width ?? sw, sw)
+        let h = max(proposal.height ?? sh, sh)
+        return CGSize(width: w, height: h)
     }
 }
