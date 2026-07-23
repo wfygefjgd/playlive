@@ -3,8 +3,8 @@ import AVKit
 import UIKit
 import Combine
 
-/// 回滚基准 1.3.4：画面在 SwiftUI 层级内（有画有声）。
-/// aspectFill + window 对齐；ready/回前台/延迟 relayout。
+/// 画面在 SwiftUI 层级内（避免被全屏 Color.black 盖住只剩声音）。
+/// layer 对齐 window 全屏 + aspectFill；ready/回前台/延迟多次 relayout，修首次底边空。
 final class FullScreenPlayerViewController: UIViewController {
     private let playerLayer = AVPlayerLayer()
     private var cancellables = Set<AnyCancellable>()
@@ -105,6 +105,7 @@ final class FullScreenPlayerViewController: UIViewController {
             view.layer.addSublayer(playerLayer)
         }
         if let window = view.window {
+            // 物理全屏（含 Home 条区域）
             playerLayer.frame = view.convert(window.bounds, from: nil)
         } else if view.bounds.width > 1, view.bounds.height > 1 {
             playerLayer.frame = view.bounds
@@ -116,6 +117,7 @@ final class FullScreenPlayerViewController: UIViewController {
                 height: min(b.width, b.height)
             )
         }
+        // 不能比 view 更小
         if playerLayer.frame.width < view.bounds.width - 1
             || playerLayer.frame.height < view.bounds.height - 1 {
             playerLayer.frame = view.bounds

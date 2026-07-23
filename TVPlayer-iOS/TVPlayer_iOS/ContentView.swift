@@ -6,7 +6,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            // 1.3.4：最底层必须是播放器
+            // 底层必须是播放器，不能只有 Color.black（否则盖住画面只剩声音）
             VideoPlayerView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(false)
