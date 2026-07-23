@@ -30,10 +30,12 @@ class M3UParserService {
             } else if !line.isEmpty, !line.hasPrefix("#"), let name = pendingName {
                 let display = normalizeDisplayName(name)
                 let key = normalizeName(display)
+                // 央视统一进「央视」分组，避免 CCTV-15/17 落在未分组
+                let group = isCCTVKey(key) ? "央视" : pendingGroup
                 if let existing = channels[key] {
                     existing.addUrl(line)
                 } else {
-                    let ch = Channel(name: display, group: pendingGroup, key: key)
+                    let ch = Channel(name: display, group: group, key: key)
                     ch.addUrl(line)
                     channels[key] = ch
                 }
@@ -42,6 +44,19 @@ class M3UParserService {
             }
         }
         return Array(channels.values)
+    }
+
+    static func isCCTVKey(_ key: String) -> Bool {
+        key.lowercased().hasPrefix("cctv")
+    }
+
+    /// 从 key/name 解析 CCTV 台号，解析失败返回 Int.max（排后）
+    static func cctvNumber(from keyOrName: String) -> Int {
+        let w = keyOrName.lowercased()
+        if let m = cctvPattern.firstMatch(in: w), m.count > 1, let num = Int(m[1]) {
+            return num
+        }
+        return Int.max
     }
 
     static func normalizeName(_ name: String) -> String {

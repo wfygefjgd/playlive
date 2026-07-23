@@ -35,11 +35,25 @@ struct ContentView: View {
                 .zIndex(50)
             }
 
-            if vm.channels.isEmpty && !vm.isBootstrapping {
-                VStack(spacing: 12) {
-                    Text(vm.indicatorText.isEmpty ? "暂无频道" : vm.indicatorText)
-                        .foregroundColor(.white)
+            // 启动/无频道：只保留一层中文引导，避免与 Indicator 叠字
+            if vm.isBootstrapping {
+                VStack(spacing: 10) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(.white)
+                    Text(vm.bootstrapMessage)
+                        .foregroundColor(.white.opacity(0.9))
+                        .font(.subheadline)
                         .multilineTextAlignment(.center)
+                }
+                .padding(20)
+                .background(Color.black.opacity(0.5))
+                .cornerRadius(12)
+                .zIndex(9)
+            } else if vm.channels.isEmpty {
+                VStack(spacing: 12) {
+                    Text("暂无频道")
+                        .foregroundColor(.white)
                     Button("重新加载源") { vm.retryLoadSources() }
                         .buttonStyle(.borderedProminent)
                 }
@@ -49,27 +63,15 @@ struct ContentView: View {
                 .zIndex(8)
             }
 
-            if vm.isBootstrapping {
-                VStack(spacing: 10) {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .tint(.white)
-                    Text(vm.bootstrapMessage)
-                        .foregroundColor(.white.opacity(0.9))
-                        .font(.subheadline)
-                }
-                .padding(20)
-                .background(Color.black.opacity(0.5))
-                .cornerRadius(12)
-                .zIndex(9)
-            }
-
             ChannelOSDView(text: vm.channelOSD)
                 .allowsHitTesting(false)
                 .zIndex(5)
-            IndicatorView(text: vm.indicatorText)
-                .allowsHitTesting(false)
-                .zIndex(5)
+            // 启动引导期间不显示底部 Indicator，防止双层文字
+            if !vm.isBootstrapping {
+                IndicatorView(text: vm.indicatorText)
+                    .allowsHitTesting(false)
+                    .zIndex(5)
+            }
 
             // 按钮仍可避开危险区，用 safeArea 内边距即可
             if vm.showFloatOverlay || vm.locked {

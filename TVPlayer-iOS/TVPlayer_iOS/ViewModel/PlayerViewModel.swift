@@ -228,7 +228,10 @@ final class PlayerViewModel: ObservableObject {
 
     func loadChannels(force: Bool = true, silent: Bool = false, preferActiveOnly: Bool = false) {
         if !force && !channels.isEmpty { return }
-        if !silent { indicatorText = "加载中..." }
+        // 引导层用 bootstrapMessage；避免与 Indicator 叠字
+        if !silent && !isBootstrapping {
+            indicatorText = "加载中..."
+        }
         let urls = preferActiveOnly ? [activeSourceUrl] : buildCandidates()
         Task {
             var result = await NetworkService.shared.fetchWithCandidates(urls: urls)
@@ -246,13 +249,13 @@ final class PlayerViewModel: ObservableObject {
         guard !loaded.isEmpty else {
             if channels.isEmpty {
                 isBootstrapping = true
-                bootstrapMessage = (errorMessage ?? "加载失败") + "，正在重试..."
-                if !silent {
-                    showIndicator(bootstrapMessage)
-                }
+                // 中文提示，不叠 Indicator
+                let msg = chineseLoadError(errorMessage)
+                bootstrapMessage = msg + "，正在重试..."
+                indicatorText = ""
                 scheduleRetryLoads()
             } else if !silent {
-                showIndicator(errorMessage ?? "刷新失败")
+                showIndicator(chineseLoadError(errorMessage))
             }
             return
         }
@@ -292,6 +295,24 @@ final class PlayerViewModel: ObservableObject {
             candidates.append(url)
         }
         return candidates
+    }
+
+    /// 把可能的英文/技术错误收成中文，避免加载层出现英文
+    private func chineseLoadError(_ raw: String?) -> String {
+        guard let raw, !raw.isEmpty else { return "加载失败" }
+        let lower = raw.lowercased()
+        if lower.contains("network") || lower.contains("internet") || lower.contains("offline")
+            || lower.contains("timed out") || lower.contains("timeout") {
+            return "网络不可用"
+        }
+        if lower.contains("parse") { return "解析失败" }
+        if lower.contains("invalid") || lower.contains("url") { return "地址无效" }
+        if lower.contains("server") || lower.contains("http") { return "服务器异常" }
+        // 已是中文则原样（截断过长）
+        if raw.range(of: "\\p{Han}", options: .regularExpression) != nil {
+            return String(raw.prefix(40))
+        }
+        return "加载失败"
     }
 
     private func restoreLastChannelPosition() {
@@ -343,23 +364,61 @@ final class PlayerViewModel: ObservableObject {
         let list: [Channel] = q.isEmpty
             ? channels
             : channels.filter { $0.name.lowercased().contains(q) || $0.group.lowercased().contains(q) }
+
+        // 归一分组名：央视系统一「央视」
+        func groupName(for ch: Channel) -> String {
+            if M3UParserService.isCCTVKey(ch.key) || ch.name.uppercased().contains("CCTV") {
+                return "央视"
+            }
+            let g = ch.group.trimmingCharacters(in: .whitespaces)
+            if g.isEmpty || g == "未分组" {
+                return "未分组"
+            }
+            if g.contains("央视") || g.uppercased().contains("CCTV") {
+                return "央视"
+            }
+            return g
+        }
+
+        func sortChannels(_ arr: [Channel]) -> [Channel] {
+            arr.sorted { a, b in
+                let na = M3UParserService.cctvNumber(from: a.key)
+                let nb = M3UParserService.cctvNumber(from: b.key)
+                // 央视按台号：3 → 4 → 5 … 15 → 17
+                if na != Int.max || nb != Int.max {
+                    if na != nb { return na < nb }
+                }
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+            }
+        }
+
         var result: [ChannelSection] = []
-        let favs = list.filter { favorites.contains($0.key) }
+        let favs = sortChannels(list.filter { favorites.contains($0.key) })
         if !favs.isEmpty {
             result.append(ChannelSection(id: "__fav__", title: "收藏", channels: favs))
         }
+
         var order: [String] = []
         var map: [String: [Channel]] = [:]
         for ch in list {
-            if map[ch.group] == nil {
-                order.append(ch.group)
-                map[ch.group] = []
+            let g = groupName(for: ch)
+            if map[g] == nil {
+                order.append(g)
+                map[g] = []
             }
-            map[ch.group]?.append(ch)
+            map[g]?.append(ch)
+        }
+        // 分组顺序：央视靠前，未分组靠后，其余按名
+        order.sort { a, b in
+            if a == "央视" { return true }
+            if b == "央视" { return false }
+            if a == "未分组" { return false }
+            if b == "未分组" { return true }
+            return a.localizedStandardCompare(b) == .orderedAscending
         }
         for g in order {
             if let arr = map[g], !arr.isEmpty {
-                result.append(ChannelSection(id: g, title: g, channels: arr))
+                result.append(ChannelSection(id: g, title: g, channels: sortChannels(arr)))
             }
         }
         return result
