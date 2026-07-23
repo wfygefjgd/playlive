@@ -1,28 +1,60 @@
 import SwiftUI
 import AVKit
 
-/// 使用系统 AVPlayerViewController，强制铺满窗口；
-/// videoGravity = resizeAspect：高度优先顶满，左右可黑边，不裁切。
-struct VideoPlayerView: UIViewControllerRepresentable {
-    @EnvironmentObject private var vm: PlayerViewModel
+/// 纯 AVPlayerLayer，不使用 AVPlayerViewController，避免系统「禁止播放」占位图。
+/// 全屏 + resizeAspect：横屏 16:9 一般为上下顶满、左右黑边，不裁切。
+final class PlayerContainerView: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
 
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let c = AVPlayerViewController()
-        c.player = vm.player.player
-        c.showsPlaybackControls = false
-        c.videoGravity = .resizeAspect
-        c.allowsPictureInPicturePlayback = false
-        c.updatesNowPlayingInfoCenter = false
-        c.view.backgroundColor = .black
-        c.view.isUserInteractionEnabled = false
-        return c
+    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+
+    var player: AVPlayer? {
+        get { playerLayer.player }
+        set {
+            playerLayer.player = newValue
+            playerLayer.videoGravity = .resizeAspect
+        }
     }
 
-    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-        if uiViewController.player !== vm.player.player {
-            uiViewController.player = vm.player.player
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .black
+        clipsToBounds = true
+        isUserInteractionEnabled = false
+        isOpaque = true
+        playerLayer.videoGravity = .resizeAspect
+        playerLayer.backgroundColor = UIColor.black.cgColor
+        playerLayer.masksToBounds = true
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playerLayer.frame = bounds
+        playerLayer.videoGravity = .resizeAspect
+        CATransaction.commit()
+    }
+}
+
+struct VideoPlayerView: UIViewRepresentable {
+    @EnvironmentObject private var vm: PlayerViewModel
+
+    func makeUIView(context: Context) -> PlayerContainerView {
+        let view = PlayerContainerView()
+        view.player = vm.player.player
+        return view
+    }
+
+    func updateUIView(_ uiView: PlayerContainerView, context: Context) {
+        if uiView.player !== vm.player.player {
+            uiView.player = vm.player.player
         }
-        uiViewController.videoGravity = .resizeAspect
-        uiViewController.view.backgroundColor = .black
+        uiView.playerLayer.videoGravity = .resizeAspect
+        uiView.setNeedsLayout()
     }
 }

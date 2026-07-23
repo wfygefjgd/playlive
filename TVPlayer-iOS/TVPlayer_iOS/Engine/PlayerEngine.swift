@@ -72,6 +72,7 @@ final class PlayerEngine: ObservableObject {
             } else if item.status == .failed {
                 DispatchQueue.main.async {
                     guard self.playToken == token else { return }
+                    // 不立刻回调，给直播握手时间；由 grace + startup 超时兜底
                     self.scheduleErrorAfterGrace(token: token)
                 }
             }
