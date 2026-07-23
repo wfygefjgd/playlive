@@ -2,8 +2,8 @@ import SwiftUI
 import AVKit
 import UIKit
 
-/// 全屏容器 + contain（resizeAspect）
-/// 对应 Flutter BoxFit.contain / RN resizeMode="contain"
+/// 方案 C：强制拉伸铺满（resize）
+/// 上下左右都顶满屏幕，允许画面变形，方便对照观感。
 final class PlayerContainerView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
 
@@ -13,7 +13,7 @@ final class PlayerContainerView: UIView {
         get { playerLayer.player }
         set {
             playerLayer.player = newValue
-            playerLayer.videoGravity = .resizeAspect
+            playerLayer.videoGravity = .resize
             playerLayer.backgroundColor = UIColor.black.cgColor
         }
     }
@@ -25,7 +25,7 @@ final class PlayerContainerView: UIView {
         clipsToBounds = true
         isUserInteractionEnabled = false
         autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        playerLayer.videoGravity = .resizeAspect
+        playerLayer.videoGravity = .resize
         playerLayer.backgroundColor = UIColor.black.cgColor
     }
 
@@ -33,7 +33,6 @@ final class PlayerContainerView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    /// 避免 UIView 报告过小的固有尺寸，导致四周“空一圈”
     override var intrinsicContentSize: CGSize {
         CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
     }
@@ -43,7 +42,7 @@ final class PlayerContainerView: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         playerLayer.frame = bounds
-        playerLayer.videoGravity = .resizeAspect
+        playerLayer.videoGravity = .resize
         CATransaction.commit()
     }
 }
@@ -65,11 +64,10 @@ struct VideoPlayerView: UIViewRepresentable {
         if uiView.player !== vm.player.player {
             uiView.player = vm.player.player
         }
-        uiView.playerLayer.videoGravity = .resizeAspect
+        uiView.playerLayer.videoGravity = .resize
         uiView.setNeedsLayout()
     }
 
-    /// iOS 16+：按父布局提议的尺寸铺满（去掉固定宽高）
     func sizeThatFits(
         _ proposal: ProposedViewSize,
         uiView: PlayerContainerView,
