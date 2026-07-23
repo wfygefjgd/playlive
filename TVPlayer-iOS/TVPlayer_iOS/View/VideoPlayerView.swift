@@ -2,9 +2,8 @@ import SwiftUI
 import AVKit
 import UIKit
 
-/// 容器占满父视图；视频 = contain（AVLayerVideoGravity.resizeAspect）
+/// 全屏容器 + contain（resizeAspect）
 /// 对应 Flutter BoxFit.contain / RN resizeMode="contain"
-/// 等比缩放，至少一边贴边，另一边可留黑，不裁切。
 final class PlayerContainerView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
 
@@ -25,7 +24,6 @@ final class PlayerContainerView: UIView {
         isOpaque = true
         clipsToBounds = true
         isUserInteractionEnabled = false
-        // 随父视图伸缩，不写死宽高
         autoresizingMask = [.flexibleWidth, .flexibleHeight]
         playerLayer.videoGravity = .resizeAspect
         playerLayer.backgroundColor = UIColor.black.cgColor
@@ -35,9 +33,13 @@ final class PlayerContainerView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    /// 避免 UIView 报告过小的固有尺寸，导致四周“空一圈”
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
-        // layer 始终等于容器 bounds；contain 由 videoGravity 完成
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         playerLayer.frame = bounds
@@ -51,7 +53,6 @@ struct VideoPlayerView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PlayerContainerView {
         let view = PlayerContainerView()
-        // 让 SwiftUI 把它当成可无限扩展的背景层，而不是固有尺寸小方块
         view.setContentHuggingPriority(.defaultLow, for: .horizontal)
         view.setContentHuggingPriority(.defaultLow, for: .vertical)
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -66,5 +67,17 @@ struct VideoPlayerView: UIViewRepresentable {
         }
         uiView.playerLayer.videoGravity = .resizeAspect
         uiView.setNeedsLayout()
+    }
+
+    /// iOS 16+：按父布局提议的尺寸铺满（去掉固定宽高）
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        uiView: PlayerContainerView,
+        context: Context
+    ) -> CGSize? {
+        let screen = UIScreen.main.bounds.size
+        let w = proposal.width ?? screen.width
+        let h = proposal.height ?? screen.height
+        return CGSize(width: max(w, 1), height: max(h, 1))
     }
 }

@@ -5,26 +5,27 @@ struct ContentView: View {
     @EnvironmentObject private var vm: PlayerViewModel
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea(.all)
+        // 用 GeometryReader 拿真实可用区域，播放器铺满（无写死宽高）
+        GeometryReader { geo in
+            let w = max(geo.size.width, 1)
+            let h = max(geo.size.height, 1)
+            ZStack {
+                Color.black
 
-            // 无固定宽高：铺满 ZStack，视频 contain 等比贴边
-            VideoPlayerView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .ignoresSafeArea(.all)
-                .allowsHitTesting(false)
+                // Contain：等比缩放，至少一边贴容器边缘
+                VideoPlayerView()
+                    .frame(width: w, height: h)
+                    .allowsHitTesting(false)
 
-            if !vm.panelVisible {
-                Color.clear
-                    .ignoresSafeArea(.all)
-                    .contentShape(Rectangle())
-                    .onTapGesture { vm.showFloat() }
-                    .simultaneousGesture(playerDragGesture())
-            }
+                if !vm.panelVisible {
+                    Color.clear
+                        .frame(width: w, height: h)
+                        .contentShape(Rectangle())
+                        .onTapGesture { vm.showFloat() }
+                        .simultaneousGesture(playerDragGesture(screenWidth: w))
+                }
 
-            if vm.panelVisible && !vm.locked {
-                GeometryReader { geo in
-                    let w = max(geo.size.width, 1)
+                if vm.panelVisible && !vm.locked {
                     HStack(spacing: 0) {
                         ChannelListPanel()
                             .frame(width: min(300, w * 0.32))
@@ -33,57 +34,53 @@ struct ContentView: View {
                             .contentShape(Rectangle())
                             .onTapGesture { vm.panelVisible = false }
                     }
+                    .zIndex(50)
                 }
-                .ignoresSafeArea(.all)
-                .zIndex(50)
-            }
 
-            // 无频道时的引导
-            if vm.channels.isEmpty && !vm.isBootstrapping {
-                VStack(spacing: 12) {
-                    Text(vm.indicatorText.isEmpty ? "暂无频道" : vm.indicatorText)
-                        .foregroundColor(.white)
-                        .multilineTextAlignment(.center)
-                    Button("重新加载源") {
-                        vm.retryLoadSources()
+                if vm.channels.isEmpty && !vm.isBootstrapping {
+                    VStack(spacing: 12) {
+                        Text(vm.indicatorText.isEmpty ? "暂无频道" : vm.indicatorText)
+                            .foregroundColor(.white)
+                            .multilineTextAlignment(.center)
+                        Button("重新加载源") { vm.retryLoadSources() }
+                            .buttonStyle(.borderedProminent)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .padding(24)
+                    .background(Color.black.opacity(0.55))
+                    .cornerRadius(12)
+                    .zIndex(8)
                 }
-                .padding(24)
-                .background(Color.black.opacity(0.55))
-                .cornerRadius(12)
-                .zIndex(8)
-            }
 
-            if vm.isBootstrapping {
-                VStack(spacing: 10) {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .tint(.white)
-                    Text(vm.bootstrapMessage)
-                        .foregroundColor(.white.opacity(0.9))
-                        .font(.subheadline)
+                if vm.isBootstrapping {
+                    VStack(spacing: 10) {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(.white)
+                        Text(vm.bootstrapMessage)
+                            .foregroundColor(.white.opacity(0.9))
+                            .font(.subheadline)
+                    }
+                    .padding(20)
+                    .background(Color.black.opacity(0.5))
+                    .cornerRadius(12)
+                    .zIndex(9)
                 }
-                .padding(20)
-                .background(Color.black.opacity(0.5))
-                .cornerRadius(12)
-                .zIndex(9)
-            }
 
-            ChannelOSDView(text: vm.channelOSD)
-                .allowsHitTesting(false)
-                .zIndex(5)
-            IndicatorView(text: vm.indicatorText)
-                .allowsHitTesting(false)
-                .zIndex(5)
+                ChannelOSDView(text: vm.channelOSD)
+                    .allowsHitTesting(false)
+                    .zIndex(5)
+                IndicatorView(text: vm.indicatorText)
+                    .allowsHitTesting(false)
+                    .zIndex(5)
 
-            if vm.showFloatOverlay || vm.locked {
-                floatingButtons
-                    .zIndex(60)
+                if vm.showFloatOverlay || vm.locked {
+                    floatingButtons
+                        .zIndex(60)
+                }
             }
+            .frame(width: w, height: h)
         }
         .ignoresSafeArea(.all)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.ignoresSafeArea(.all))
         .onAppear { vm.startup() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
@@ -116,11 +113,10 @@ struct ContentView: View {
         }
     }
 
-    private func playerDragGesture() -> some Gesture {
+    private func playerDragGesture(screenWidth w: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 24)
             .onChanged { value in
                 guard !vm.locked, !vm.panelVisible else { return }
-                let w = max(UIScreen.main.bounds.width, 1)
                 let sx = value.startLocation.x
                 let vertical = abs(value.translation.height) >= abs(value.translation.width)
                 guard vertical, sx > w * 0.65 else { return }
@@ -128,7 +124,6 @@ struct ContentView: View {
             }
             .onEnded { value in
                 guard !vm.locked, !vm.panelVisible else { return }
-                let w = max(UIScreen.main.bounds.width, 1)
                 let sx = value.startLocation.x
                 if sx > w * 0.65 {
                     vm.handleVolumeDrag(translationHeight: value.translation.height, ended: true)
