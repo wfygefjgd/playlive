@@ -1,105 +1,177 @@
 import SwiftUI
 import AVKit
 import UIKit
+import Combine
 
-/// 播放层强制盖住整个 UIWindow（含顶部刘海区、底部 Home 条区域）。
-/// videoGravity = resize：在「真全屏矩形」上拉伸铺满。
-final class PlayerContainerView: UIView {
-    override class var layerClass: AnyClass { AVPlayerLayer.self }
+/// Fill + 首次=回前台 relayout（1.3.0 架构，有画有声）
+final class FullScreenPlayerViewController: UIViewController {
+    private let playerLayer = AVPlayerLayer()
+    private var cancellables = Set<AnyCancellable>()
+    private var delayItems: [DispatchWorkItem] = []
 
-    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    override var prefersHomeIndicatorAutoHidden: Bool { true }
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { [.bottom, .top] }
 
-    var player: AVPlayer? {
-        get { playerLayer.player }
-        set {
-            playerLayer.player = newValue
-            applyVideoStyle()
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        view.clipsToBounds = false
+        view.isOpaque = true
+        playerLayer.videoGravity = .resizeAspectFill
+        playerLayer.backgroundColor = UIColor.black.cgColor
+        view.layer.addSublayer(playerLayer)
+
+        edgesForExtendedLayout = .all
+        extendedLayoutIncludesOpaqueBars = true
+        if #available(iOS 11.0, *) {
+            additionalSafeAreaInsets = .zero
+        }
+
+        for name: Notification.Name in [
+            UIApplication.didBecomeActiveNotification,
+            UIApplication.willEnterForegroundNotification,
+            UIDevice.orientationDidChangeNotification,
+            .tvPlayerNeedsRelayout
+        ] {
+            NotificationCenter.default.publisher(for: name)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    self?.applyHomePolicy()
+                    self?.forceRelayout()
+                    self?.scheduleRelayoutPasses()
+                }
+                .store(in: &cancellables)
         }
     }
 
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = .black
-        isOpaque = true
-        // 允许 layer 画到 safe area / 视图边界之外
-        clipsToBounds = false
-        isUserInteractionEnabled = false
-        autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        applyVideoStyle()
+    deinit { delayItems.forEach { $0.cancel() } }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        applyHomePolicy()
+        forceRelayout()
+        scheduleRelayoutPasses()
     }
 
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        neutralizeSafeArea()
+        layoutPlayer()
     }
 
-    override var intrinsicContentSize: CGSize {
-        CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        neutralizeSafeArea()
+        layoutPlayer()
     }
 
-    private func applyVideoStyle() {
-        playerLayer.videoGravity = .resize
-        playerLayer.backgroundColor = UIColor.black.cgColor
-        playerLayer.masksToBounds = true
+    private func applyHomePolicy() {
+        setNeedsUpdateOfHomeIndicatorAutoHidden()
+        setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
     }
 
-    /// 把 layer 对齐到整个 window（吃掉 top/bottom safe area）
-    private func layoutPlayerLayerToWindow() {
+    private func neutralizeSafeArea() {
+        if #available(iOS 11.0, *) {
+            let s = view.safeAreaInsets
+            additionalSafeAreaInsets = UIEdgeInsets(
+                top: -s.top, left: -s.left, bottom: -s.bottom, right: -s.right
+            )
+        }
+    }
+
+    func bind(player: AVPlayer?) {
+        playerLayer.player = player
+        playerLayer.videoGravity = .resizeAspectFill
+        forceRelayout()
+    }
+
+    func onPlaybackReady() {
+        applyHomePolicy()
+        forceRelayout()
+        scheduleRelayoutPasses()
+    }
+
+    func forceRelayout() {
+        neutralizeSafeArea()
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+        layoutPlayer()
+        DispatchQueue.main.async { [weak self] in
+            self?.neutralizeSafeArea()
+            self?.layoutPlayer()
+        }
+    }
+
+    private func scheduleRelayoutPasses() {
+        delayItems.forEach { $0.cancel() }
+        delayItems.removeAll()
+        for t in [0.0, 0.05, 0.15, 0.35, 0.7, 1.2, 2.0] {
+            let item = DispatchWorkItem { [weak self] in
+                self?.applyHomePolicy()
+                self?.neutralizeSafeArea()
+                self?.layoutPlayer()
+            }
+            delayItems.append(item)
+            DispatchQueue.main.asyncAfter(deadline: .now() + t, execute: item)
+        }
+    }
+
+    private func layoutPlayer() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        if let window = window {
-            // window 坐标系全屏 → 本 view 坐标系
-            let full = window.convert(window.bounds, to: self)
-            playerLayer.frame = full
-        } else {
-            playerLayer.frame = bounds
+        if playerLayer.superlayer == nil {
+            view.layer.addSublayer(playerLayer)
         }
-        playerLayer.videoGravity = .resize
+        if let window = view.window {
+            var full = window.bounds
+            let screen = window.screen.bounds
+            if full.width * full.height < screen.width * screen.height * 0.95 {
+                full = screen
+            }
+            playerLayer.frame = view.convert(full, from: nil)
+        } else if view.bounds.width > 2, view.bounds.height > 2 {
+            playerLayer.frame = view.bounds
+        } else {
+            let b = UIScreen.main.bounds
+            playerLayer.frame = CGRect(
+                x: 0, y: 0,
+                width: max(b.width, b.height),
+                height: min(b.width, b.height)
+            )
+        }
+        if view.bounds.width > 2, view.bounds.height > 2 {
+            if playerLayer.frame.width < view.bounds.width - 0.5
+                || playerLayer.frame.height < view.bounds.height - 0.5 {
+                playerLayer.frame = view.bounds
+            }
+        }
+        playerLayer.videoGravity = .resizeAspectFill
+        playerLayer.isHidden = false
+        playerLayer.opacity = 1
         CATransaction.commit()
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        layoutPlayerLayerToWindow()
-    }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        setNeedsLayout()
-        layoutIfNeeded()
     }
 }
 
-struct VideoPlayerView: UIViewRepresentable {
+struct VideoPlayerView: UIViewControllerRepresentable {
     @EnvironmentObject private var vm: PlayerViewModel
 
-    func makeUIView(context: Context) -> PlayerContainerView {
-        let view = PlayerContainerView()
-        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        view.setContentHuggingPriority(.defaultLow, for: .vertical)
-        view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        view.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
-        view.player = vm.player.player
-        return view
+    func makeUIViewController(context: Context) -> FullScreenPlayerViewController {
+        let vc = FullScreenPlayerViewController()
+        vc.bind(player: vm.player.player)
+        return vc
     }
 
-    func updateUIView(_ uiView: PlayerContainerView, context: Context) {
-        if uiView.player !== vm.player.player {
-            uiView.player = vm.player.player
+    func updateUIViewController(_ vc: FullScreenPlayerViewController, context: Context) {
+        vc.bind(player: vm.player.player)
+        _ = vm.playerLayoutEpoch
+        if vm.player.isReady {
+            vc.onPlaybackReady()
+        } else {
+            vc.forceRelayout()
         }
-        uiView.setNeedsLayout()
     }
+}
 
-    func sizeThatFits(
-        _ proposal: ProposedViewSize,
-        uiView: PlayerContainerView,
-        context: Context
-    ) -> CGSize? {
-        // 始终按物理屏（横屏：宽=长边，高=短边）
-        let b = UIScreen.main.bounds
-        let sw = max(b.width, b.height)
-        let sh = min(b.width, b.height)
-        let w = max(proposal.width ?? sw, sw)
-        let h = max(proposal.height ?? sh, sh)
-        return CGSize(width: w, height: h)
-    }
+extension Notification.Name {
+    static let tvPlayerNeedsRelayout = Notification.Name("tvPlayerNeedsRelayout")
 }

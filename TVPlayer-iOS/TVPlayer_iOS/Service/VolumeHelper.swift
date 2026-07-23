@@ -2,41 +2,68 @@ import AVFoundation
 import MediaPlayer
 import UIKit
 
-/// 读写系统媒体音量（非仅 AVPlayer.volume）
+/// 常驻隐藏 MPVolumeView，系统音量调节更稳
 enum VolumeHelper {
+    private static var volumeView: MPVolumeView?
+    private static var slider: UISlider?
+
     static var current: Float {
         AVAudioSession.sharedInstance().outputVolume
     }
 
-    static func setVolume(_ value: Float) {
-        let v = max(0, min(1, value))
-        let view = MPVolumeView(frame: .zero)
-        // 离屏避免闪一下
-        view.alpha = 0.0001
-        view.isUserInteractionEnabled = false
-        guard let window = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .flatMap(\.windows)
-            .first(where: \.isKeyWindow) else {
-            // 回退：只改 session 无法直接写，尝试找 slider
-            applyToSlider(in: view, value: v)
-            return
+    private static func ensureInstalled() {
+        if volumeView != nil, slider != nil { return }
+        let v = MPVolumeView(frame: CGRect(x: -2000, y: -2000, width: 1, height: 1))
+        v.alpha = 0.0001
+        v.isUserInteractionEnabled = false
+        v.showsRouteButton = false
+        volumeView = v
+        slider = v.subviews.compactMap { $0 as? UISlider }.first
+
+        if let window = keyWindow() {
+            window.addSubview(v)
+        } else {
+            // 稍后再挂
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                if let w = keyWindow(), let vv = volumeView, vv.superview == nil {
+                    w.addSubview(vv)
+                }
+                if slider == nil {
+                    slider = volumeView?.subviews.compactMap { $0 as? UISlider }.first
+                }
+            }
         }
-        window.addSubview(view)
-        applyToSlider(in: view, value: v)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            view.removeFromSuperview()
+        if slider == nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                slider = volumeView?.subviews.compactMap { $0 as? UISlider }.first
+            }
+        }
+    }
+
+    private static func keyWindow() -> UIWindow? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)
+    }
+
+    static func setVolume(_ value: Float) {
+        ensureInstalled()
+        let v = max(0, min(1, value))
+        if let slider {
+            slider.value = v
+        } else {
+            // 再试一次找 slider
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+                if slider == nil {
+                    slider = volumeView?.subviews.compactMap { $0 as? UISlider }.first
+                }
+                slider?.value = v
+            }
         }
     }
 
     static func adjust(by delta: Float) {
         setVolume(current + delta)
-    }
-
-    private static func applyToSlider(in volumeView: MPVolumeView, value: Float) {
-        let slider = volumeView.subviews.first(where: { $0 is UISlider }) as? UISlider
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
-            slider?.value = value
-        }
     }
 }

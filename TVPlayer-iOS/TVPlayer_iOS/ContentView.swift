@@ -6,9 +6,6 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Color.black
-
-            // 播放层：吃满整窗（含安全区），由内部 layer 对齐 window
             VideoPlayerView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(false)
@@ -27,7 +24,8 @@ struct ContentView: View {
                         ChannelListPanel()
                             .frame(width: min(300, w * 0.32))
                             .frame(maxHeight: .infinity)
-                        Color.black.opacity(0.001)
+                            .background(Color(white: 0.12).opacity(0.96))
+                        Color.black.opacity(0.25)
                             .contentShape(Rectangle())
                             .onTapGesture { vm.panelVisible = false }
                     }
@@ -35,7 +33,7 @@ struct ContentView: View {
                 .zIndex(50)
             }
 
-            // 启动/无频道：只保留一层中文引导，避免与 Indicator 叠字
+            // bootstrap：只一层中文引导
             if vm.isBootstrapping {
                 VStack(spacing: 10) {
                     ProgressView()
@@ -47,7 +45,7 @@ struct ContentView: View {
                         .multilineTextAlignment(.center)
                 }
                 .padding(20)
-                .background(Color.black.opacity(0.5))
+                .background(Color.black.opacity(0.55))
                 .cornerRadius(12)
                 .zIndex(9)
             } else if vm.channels.isEmpty {
@@ -66,26 +64,29 @@ struct ContentView: View {
             ChannelOSDView(text: vm.channelOSD)
                 .allowsHitTesting(false)
                 .zIndex(5)
-            // 启动引导期间不显示底部 Indicator，防止双层文字
+            // bootstrap 期间不显示 Indicator，防叠字
             if !vm.isBootstrapping {
                 IndicatorView(text: vm.indicatorText)
                     .allowsHitTesting(false)
                     .zIndex(5)
             }
 
-            // 按钮仍可避开危险区，用 safeArea 内边距即可
             if vm.showFloatOverlay || vm.locked {
                 floatingButtons
-                    .padding(.top, 8)
-                    .padding(.bottom, 8)
+                    .padding(.top, 12)
+                    .padding(.bottom, 20)
                     .zIndex(60)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // 关键：整页忽略全部安全区，播放区域可画进 Home 条 / 顶部
+        .background(Color.black)
         .ignoresSafeArea(.all, edges: .all)
-        .background(Color.black.ignoresSafeArea(.all, edges: .all))
-        .onAppear { vm.startup() }
+        .onAppear {
+            vm.startup()
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .tvPlayerNeedsRelayout, object: nil)
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             vm.pause()
         }
@@ -116,35 +117,44 @@ struct ContentView: View {
         }
     }
 
+    /// 手势分区：
+    /// - 右侧 35%：仅上下滑 → 音量
+    /// - 中间 30%：仅上下滑 → 换台
+    /// - 全屏横滑（位移够大）：切线路（不与右侧竖滑抢）
     private func playerDragGesture() -> some Gesture {
         DragGesture(minimumDistance: 24)
             .onChanged { value in
                 guard !vm.locked, !vm.panelVisible else { return }
                 let w = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height, 1)
                 let sx = value.startLocation.x
-                let vertical = abs(value.translation.height) >= abs(value.translation.width)
-                guard vertical, sx > w * 0.65 else { return }
-                vm.handleVolumeDrag(translationHeight: value.translation.height, ended: false)
+                let dx = value.translation.width
+                let dy = value.translation.height
+                // 明确竖滑且在右侧 → 音量
+                guard abs(dy) > abs(dx), sx > w * 0.65 else { return }
+                vm.handleVolumeDrag(translationHeight: dy, ended: false)
             }
             .onEnded { value in
                 guard !vm.locked, !vm.panelVisible else { return }
                 let w = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height, 1)
                 let sx = value.startLocation.x
-                if sx > w * 0.65 {
-                    vm.handleVolumeDrag(translationHeight: value.translation.height, ended: true)
-                }
                 let dx = value.translation.width
                 let dy = value.translation.height
-                if abs(dx) > abs(dy), abs(dx) > 40 {
-                    if sx < w * 0.35 || sx > w * 0.65 {
-                        if dx > 0 { vm.switchSource(direction: -1) }
-                        else { vm.switchSource(direction: 1) }
-                    }
-                } else if abs(dy) > abs(dx), abs(dy) > 40 {
-                    if sx >= w * 0.35 && sx <= w * 0.65 {
-                        if dy < 0 { vm.nextChannel() }
-                        else { vm.prevChannel() }
-                    }
+
+                if sx > w * 0.65 {
+                    vm.handleVolumeDrag(translationHeight: dy, ended: true)
+                }
+
+                // 横滑优先判切线（阈值更高）
+                if abs(dx) > abs(dy), abs(dx) > 50 {
+                    if dx > 0 { vm.switchSource(direction: -1) }
+                    else { vm.switchSource(direction: 1) }
+                    return
+                }
+
+                // 中间区域竖滑换台（避开右侧音量区）
+                if abs(dy) > abs(dx), abs(dy) > 40, sx >= w * 0.30, sx <= w * 0.65 {
+                    if dy < 0 { vm.nextChannel() }
+                    else { vm.prevChannel() }
                 }
             }
     }

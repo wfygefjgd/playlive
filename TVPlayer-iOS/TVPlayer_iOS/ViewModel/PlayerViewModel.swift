@@ -37,6 +37,8 @@ final class PlayerViewModel: ObservableObject {
     @Published var favorites: Set<String> = []
     @Published var isBootstrapping = false
     @Published var bootstrapMessage = "正在连接网络..."
+    /// 驱动播放层 relayout（ready / 回前台）
+    @Published var playerLayoutEpoch: Int = 0
 
     let player = PlayerEngine()
     private let storage = StorageService()
@@ -90,8 +92,7 @@ final class PlayerViewModel: ObservableObject {
         } else {
             isBootstrapping = true
             bootstrapMessage = "正在加载频道列表..."
-            showIndicator("加载中...")
-            // 先等网络可用再拉，避免未授权就报错卡住
+            indicatorText = ""
             beginBootstrapLoad()
         }
     }
@@ -99,16 +100,14 @@ final class PlayerViewModel: ObservableObject {
     /// 首次无缓存：等待网络授权 → 拉源 → 失败自动重试（无需手动换源）
     private func beginBootstrapLoad() {
         isBootstrapping = true
+        indicatorText = ""
         if NetworkMonitor.shared.isSatisfied {
             bootstrapMessage = "正在加载频道列表..."
-            showIndicator("加载中...")
             loadChannels(force: true, silent: false, preferActiveOnly: false)
             scheduleRetryLoads()
             return
         }
         bootstrapMessage = "等待网络权限（请点「允许」）..."
-        showIndicator("等待网络权限...")
-        // 仍尝试一次（部分机型 path 滞后）；失败后由 scheduleRetry + onSatisfied 接管
         loadChannels(force: true, silent: false, preferActiveOnly: true)
         scheduleRetryLoads()
     }
@@ -150,6 +149,7 @@ final class PlayerViewModel: ObservableObject {
     }
 
     func onAppBecameActive() {
+        bumpPlayerLayout()
         if channels.isEmpty {
             retryLoadSources()
         }
@@ -159,9 +159,14 @@ final class PlayerViewModel: ObservableObject {
     func retryLoadSources() {
         isBootstrapping = true
         bootstrapMessage = "正在加载频道列表..."
-        showIndicator("加载中...")
+        indicatorText = ""
         loadChannels(force: true, silent: false, preferActiveOnly: false)
         scheduleRetryLoads()
+    }
+
+    private func bumpPlayerLayout() {
+        playerLayoutEpoch &+= 1
+        NotificationCenter.default.post(name: .tvPlayerNeedsRelayout, object: nil)
     }
 
     func restoreSources() {
@@ -335,21 +340,11 @@ final class PlayerViewModel: ObservableObject {
     func applyRules(_ input: [Channel]) -> [Channel] {
         input.compactMap { src in
             let filtered = Channel(name: src.name, group: src.group, key: src.key)
-            for (i, url) in src.urls.enumerated() {
+            for url in src.urls {
                 if storage.isLineHidden(url) { continue }
-                if shouldSkipLine(key: src.key, index: i) { continue }
                 filtered.addUrl(url)
             }
             return filtered.sourceCount > 0 ? filtered : nil
-        }
-    }
-
-    private func shouldSkipLine(key: String, index: Int) -> Bool {
-        switch key {
-        case "cctv10", "cctv14", "北京": return index == 0
-        case "cctv13": return (0...2).contains(index)
-        case "湖南": return (0...1).contains(index)
-        default: return false
         }
     }
 
@@ -469,6 +464,8 @@ final class PlayerViewModel: ObservableObject {
         autoSwitchState = .idle
         scheduleHideFloat()
         if !indicatorText.isEmpty { showIndicator("") }
+        // 首次布局对齐「回前台」
+        bumpPlayerLayout()
     }
 
     private func onPlayerError() { autoSwitchLine(hint: "线路失败，切换下一线路") }
@@ -648,7 +645,10 @@ final class PlayerViewModel: ObservableObject {
     }
 
     func pause() { player.pause() }
-    func resume() { player.resume() }
+    func resume() {
+        player.resume()
+        bumpPlayerLayout()
+    }
 
     func handleVolumeDrag(translationHeight: CGFloat, ended: Bool) {
         if ended {
