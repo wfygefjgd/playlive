@@ -2,8 +2,7 @@ import SwiftUI
 import AVKit
 import UIKit
 
-/// 方案 C：强制拉伸铺满（resize）
-/// 上下左右都顶满屏幕，允许画面变形，方便对照观感。
+/// 方案 C 加强：layer 与视图同大 + resize 拉伸，强制铺满容器（可变形，无黑边）
 final class PlayerContainerView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
 
@@ -13,8 +12,7 @@ final class PlayerContainerView: UIView {
         get { playerLayer.player }
         set {
             playerLayer.player = newValue
-            playerLayer.videoGravity = .resize
-            playerLayer.backgroundColor = UIColor.black.cgColor
+            applyStretch()
         }
     }
 
@@ -25,8 +23,7 @@ final class PlayerContainerView: UIView {
         clipsToBounds = true
         isUserInteractionEnabled = false
         autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        playerLayer.videoGravity = .resize
-        playerLayer.backgroundColor = UIColor.black.cgColor
+        applyStretch()
     }
 
     required init?(coder: NSCoder) {
@@ -34,16 +31,30 @@ final class PlayerContainerView: UIView {
     }
 
     override var intrinsicContentSize: CGSize {
+        // 不报告小固有尺寸，避免被压成中间一块
         CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
+    }
+
+    private func applyStretch() {
+        playerLayer.videoGravity = .resize
+        playerLayer.backgroundColor = UIColor.black.cgColor
+        playerLayer.masksToBounds = true
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        // layerClass 就是 AVPlayerLayer，frame 跟随 bounds 即可
         playerLayer.frame = bounds
         playerLayer.videoGravity = .resize
         CATransaction.commit()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        setNeedsLayout()
+        layoutIfNeeded()
     }
 }
 
@@ -68,14 +79,22 @@ struct VideoPlayerView: UIViewRepresentable {
         uiView.setNeedsLayout()
     }
 
+    /// 按父布局（或整屏）尺寸撑满
     func sizeThatFits(
         _ proposal: ProposedViewSize,
         uiView: PlayerContainerView,
         context: Context
     ) -> CGSize? {
         let screen = UIScreen.main.bounds.size
-        let w = proposal.width ?? screen.width
-        let h = proposal.height ?? screen.height
-        return CGSize(width: max(w, 1), height: max(h, 1))
+        // 横屏时取较大边为宽
+        let sw = max(screen.width, screen.height)
+        let sh = min(screen.width, screen.height)
+        let w = proposal.width ?? sw
+        let h = proposal.height ?? sh
+        // 若提议尺寸明显小于屏幕，仍用屏幕，避免被安全区裁成“四周黑框”
+        return CGSize(
+            width: max(w, sw * 0.98, 1),
+            height: max(h, sh * 0.98, 1)
+        )
     }
 }

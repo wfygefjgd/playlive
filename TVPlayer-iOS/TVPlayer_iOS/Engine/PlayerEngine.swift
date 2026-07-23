@@ -3,14 +3,14 @@ import Combine
 
 /// 起播给足时间；只有真正长时间无画面/卡死才回调切换
 final class PlayerEngine: ObservableObject {
-    /// 起播超时（比上一版再短 2s）
-    static let startupTimeoutNs: UInt64 = 13_000_000_000
+    /// 起播超时（再缩短约 2s）
+    static let startupTimeoutNs: UInt64 = 11_000_000_000
     /// 播放中连续卡顿才切
-    static let stallTimeoutNs: UInt64 = 8_000_000_000
+    static let stallTimeoutNs: UInt64 = 6_000_000_000
     /// ready 后保护期
-    static let readyProtectNs: UInt64 = 4_000_000_000
+    static let readyProtectNs: UInt64 = 2_000_000_000
     /// error 至少等这么久再报失败
-    static let errorGraceNs: UInt64 = 5_000_000_000
+    static let errorGraceNs: UInt64 = 3_000_000_000
 
     let player = AVPlayer()
     private var cancellables = Set<AnyCancellable>()

@@ -5,30 +5,36 @@ struct ContentView: View {
     @EnvironmentObject private var vm: PlayerViewModel
 
     var body: some View {
-        // 用 GeometryReader 拿真实可用区域，播放器铺满（无写死宽高）
+        // GeometryReader 放最外，并 ignoresSafeArea，拿整屏尺寸（含底部 home 条区域）
         GeometryReader { geo in
-            let w = max(geo.size.width, 1)
-            let h = max(geo.size.height, 1)
+            let screen = UIScreen.main.bounds
+            // 横屏：宽=较长边，高=较短边，避免旋转瞬间宽高颠倒导致底部空一条
+            let sw = max(screen.width, screen.height)
+            let sh = min(screen.width, screen.height)
+            let w = max(geo.size.width, sw, 1)
+            let h = max(geo.size.height, sh, 1)
+
             ZStack {
                 Color.black
 
-                // Contain：等比缩放，至少一边贴容器边缘
                 VideoPlayerView()
                     .frame(width: w, height: h)
+                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
                     .allowsHitTesting(false)
 
                 if !vm.panelVisible {
                     Color.clear
                         .frame(width: w, height: h)
+                        .position(x: geo.size.width / 2, y: geo.size.height / 2)
                         .contentShape(Rectangle())
                         .onTapGesture { vm.showFloat() }
-                        .simultaneousGesture(playerDragGesture(screenWidth: w))
+                        .simultaneousGesture(playerDragGesture(screenWidth: max(geo.size.width, 1)))
                 }
 
                 if vm.panelVisible && !vm.locked {
                     HStack(spacing: 0) {
                         ChannelListPanel()
-                            .frame(width: min(300, w * 0.32))
+                            .frame(width: min(300, max(geo.size.width, 1) * 0.32))
                             .frame(maxHeight: .infinity)
                         Color.black.opacity(0.001)
                             .contentShape(Rectangle())
@@ -78,7 +84,7 @@ struct ContentView: View {
                         .zIndex(60)
                 }
             }
-            .frame(width: w, height: h)
+            .frame(width: geo.size.width, height: geo.size.height)
         }
         .ignoresSafeArea(.all)
         .background(Color.black.ignoresSafeArea(.all))
