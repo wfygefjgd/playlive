@@ -20,7 +20,7 @@ final class WindowVideoSurface {
         hostView.backgroundColor = .black
         hostView.isUserInteractionEnabled = false
         hostView.translatesAutoresizingMaskIntoConstraints = false
-        playerLayer.videoGravity = .resizeAspectFill
+        playerLayer.videoGravity = .resizeAspect
         playerLayer.backgroundColor = UIColor.black.cgColor
         hostView.layer.addSublayer(playerLayer)
 
@@ -41,7 +41,7 @@ final class WindowVideoSurface {
     func setPlayer(_ player: AVPlayer?) {
         self.player = player
         playerLayer.player = player
-        playerLayer.videoGravity = .resizeAspectFill
+        playerLayer.videoGravity = .resizeAspect
         installAndLayout()
         scheduleExtraLayouts()
     }
@@ -82,7 +82,7 @@ final class WindowVideoSurface {
             playerLayer.frame = window.bounds
             hostView.frame = window.bounds
         }
-        playerLayer.videoGravity = .resizeAspectFill
+        playerLayer.videoGravity = .resizeAspect
         playerLayer.isHidden = false
         playerLayer.opacity = 1
         CATransaction.commit()
