@@ -3,26 +3,27 @@ import AVKit
 import UIKit
 import Combine
 
-// MARK: - 挂到 UIWindow 底层的全屏播放宿主（绕过 SwiftUI safe area / clips）
-
-final class WindowPlayerHost {
-    static let shared = WindowPlayerHost()
-
-    private let container = UIView(frame: .zero)
+/// 画面在 SwiftUI 层级内（避免被全屏 Color.black 盖住只剩声音）。
+/// layer 对齐 window 全屏 + aspectFill；ready/回前台/延迟多次 relayout，修首次底边空。
+final class FullScreenPlayerViewController: UIViewController {
     private let playerLayer = AVPlayerLayer()
-    private var boundPlayer: AVPlayer?
     private var cancellables = Set<AnyCancellable>()
-    private var installedWindow: UIWindow?
     private var delayItems: [DispatchWorkItem] = []
 
-    private init() {
-        container.backgroundColor = .black
-        container.isUserInteractionEnabled = false
-        container.clipsToBounds = true
-        container.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        view.clipsToBounds = false
+        view.isOpaque = true
         playerLayer.videoGravity = .resizeAspectFill
         playerLayer.backgroundColor = UIColor.black.cgColor
-        container.layer.addSublayer(playerLayer)
+        view.layer.addSublayer(playerLayer)
+
+        edgesForExtendedLayout = .all
+        extendedLayoutIncludesOpaqueBars = true
+        if #available(iOS 11.0, *) {
+            additionalSafeAreaInsets = .zero
+        }
 
         let notes: [Notification.Name] = [
             UIApplication.didBecomeActiveNotification,
@@ -30,144 +31,121 @@ final class WindowPlayerHost {
             UIDevice.orientationDidChangeNotification,
             .tvPlayerNeedsRelayout
         ]
-        for n in notes {
-            NotificationCenter.default.publisher(for: n)
+        for name in notes {
+            NotificationCenter.default.publisher(for: name)
                 .receive(on: DispatchQueue.main)
-                .sink { [weak self] _ in self?.relayout(reason: n.rawValue) }
+                .sink { [weak self] _ in
+                    self?.forceRelayout()
+                    self?.scheduleRelayoutPasses()
+                }
                 .store(in: &cancellables)
         }
     }
 
-    func attach(player: AVPlayer?) {
-        boundPlayer = player
+    deinit {
+        delayItems.forEach { $0.cancel() }
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        forceRelayout()
+        scheduleRelayoutPasses()
+    }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        if #available(iOS 11.0, *) {
+            let s = view.safeAreaInsets
+            additionalSafeAreaInsets = UIEdgeInsets(
+                top: -s.top, left: -s.left, bottom: -s.bottom, right: -s.right
+            )
+        }
+        layoutPlayer()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        layoutPlayer()
+    }
+
+    func bind(player: AVPlayer?) {
         playerLayer.player = player
         playerLayer.videoGravity = .resizeAspectFill
-        ensureOnKeyWindow()
-        relayout(reason: "attach")
-        schedulePasses()
+        forceRelayout()
     }
 
-    func detach() {
+    func onPlaybackReady() {
+        forceRelayout()
+        scheduleRelayoutPasses()
+    }
+
+    func forceRelayout() {
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+        layoutPlayer()
+        DispatchQueue.main.async { [weak self] in
+            self?.layoutPlayer()
+        }
+    }
+
+    private func scheduleRelayoutPasses() {
         delayItems.forEach { $0.cancel() }
         delayItems.removeAll()
-        playerLayer.player = nil
-        boundPlayer = nil
-        container.removeFromSuperview()
-        installedWindow = nil
-    }
-
-    func ensureOnKeyWindow() {
-        guard let window = keyWindow() else { return }
-        if container.superview !== window {
-            // 插到最底层，SwiftUI 内容盖在上面
-            window.insertSubview(container, at: 0)
-            installedWindow = window
-        }
-        // 父级若 clip，会裁掉全屏——尽量关掉
-        var v: UIView? = container
-        while let cur = v {
-            cur.clipsToBounds = false
-            v = cur.superview
-        }
-        container.clipsToBounds = true
-    }
-
-    func relayout(reason: String) {
-        ensureOnKeyWindow()
-        guard let window = container.window ?? keyWindow() else { return }
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        container.frame = window.bounds
-        playerLayer.frame = container.bounds
-        playerLayer.videoGravity = .resizeAspectFill
-        if playerLayer.player == nil, let p = boundPlayer {
-            playerLayer.player = p
-        }
-        CATransaction.commit()
-        // 保证在 SwiftUI 根视图之下
-        if let window = container.window {
-            window.sendSubviewToBack(container)
-        }
-    }
-
-    private func schedulePasses() {
-        delayItems.forEach { $0.cancel() }
-        delayItems.removeAll()
-        // 首次布局 / Home 条 inset 晚到：多拍几次
-        for t in [0.0, 0.05, 0.12, 0.25, 0.5, 1.0, 1.5] {
-            let item = DispatchWorkItem { [weak self] in
-                self?.relayout(reason: "delay-\(t)")
-            }
+        for t in [0.05, 0.15, 0.35, 0.7, 1.2] {
+            let item = DispatchWorkItem { [weak self] in self?.layoutPlayer() }
             delayItems.append(item)
             DispatchQueue.main.asyncAfter(deadline: .now() + t, execute: item)
         }
     }
 
-    private func keyWindow() -> UIWindow? {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        for scene in scenes {
-            if let w = scene.windows.first(where: \.isKeyWindow) { return w }
+    private func layoutPlayer() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if playerLayer.superlayer == nil {
+            view.layer.addSublayer(playerLayer)
         }
-        return scenes.first?.windows.first
-    }
-}
-
-// MARK: - SwiftUI：占位 + 驱动 window 宿主
-
-/// 透明占位；真正画面在 WindowPlayerHost（window 最底层全屏）
-final class PlayerPlaceholderView: UIView {
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = .clear
-        isUserInteractionEnabled = false
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        if window != nil {
-            WindowPlayerHost.shared.ensureOnKeyWindow()
-            WindowPlayerHost.shared.relayout(reason: "placeholder-window")
-            WindowPlayerHost.shared.attach(player: WindowPlayerHost.sharedPlayerRef)
+        if let window = view.window {
+            // 物理全屏（含 Home 条区域）
+            playerLayer.frame = view.convert(window.bounds, from: nil)
+        } else if view.bounds.width > 1, view.bounds.height > 1 {
+            playerLayer.frame = view.bounds
+        } else {
+            let b = UIScreen.main.bounds
+            playerLayer.frame = CGRect(
+                x: 0, y: 0,
+                width: max(b.width, b.height),
+                height: min(b.width, b.height)
+            )
         }
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        WindowPlayerHost.shared.relayout(reason: "placeholder-layout")
+        // 不能比 view 更小
+        if playerLayer.frame.width < view.bounds.width - 1
+            || playerLayer.frame.height < view.bounds.height - 1 {
+            playerLayer.frame = view.bounds
+        }
+        playerLayer.videoGravity = .resizeAspectFill
+        playerLayer.isHidden = false
+        playerLayer.opacity = 1
+        CATransaction.commit()
     }
 }
 
-extension WindowPlayerHost {
-    /// 给 placeholder 取当前 player 用（由 Representable 写入）
-    fileprivate static weak var sharedPlayerRef: AVPlayer?
-}
-
-struct VideoPlayerView: UIViewRepresentable {
+struct VideoPlayerView: UIViewControllerRepresentable {
     @EnvironmentObject private var vm: PlayerViewModel
 
-    func makeUIView(context: Context) -> PlayerPlaceholderView {
-        let v = PlayerPlaceholderView()
-        WindowPlayerHost.sharedPlayerRef = vm.player.player
-        WindowPlayerHost.shared.attach(player: vm.player.player)
-        return v
+    func makeUIViewController(context: Context) -> FullScreenPlayerViewController {
+        let vc = FullScreenPlayerViewController()
+        vc.bind(player: vm.player.player)
+        return vc
     }
 
-    func updateUIView(_ uiView: PlayerPlaceholderView, context: Context) {
-        WindowPlayerHost.sharedPlayerRef = vm.player.player
-        WindowPlayerHost.shared.attach(player: vm.player.player)
-        // 驱动：就绪 epoch 变化时再铺
+    func updateUIViewController(_ uiViewController: FullScreenPlayerViewController, context: Context) {
+        uiViewController.bind(player: vm.player.player)
         _ = vm.playerLayoutEpoch
         if vm.player.isReady {
-            WindowPlayerHost.shared.relayout(reason: "ready-epoch")
+            uiViewController.onPlaybackReady()
+        } else {
+            uiViewController.forceRelayout()
         }
-    }
-
-    static func dismantleUIView(_ uiView: PlayerPlaceholderView, coordinator: ()) {
-        // 不在 dismantle 里 detach，避免 SwiftUI 刷新时黑屏；App 生命周期内常驻
     }
 }
 

@@ -6,8 +6,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Color.black
-
+            // 底层必须是播放器，不能只有 Color.black（否则盖住画面只剩声音）
             VideoPlayerView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(false)
@@ -78,8 +77,8 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
         .ignoresSafeArea(.all, edges: .all)
-        .background(Color.black.ignoresSafeArea(.all, edges: .all))
         .onAppear { vm.startup() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             vm.pause()
