@@ -96,16 +96,19 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
-    /// 首次无缓存：等待网络 → 拉源 → 失败自动重试
+    /// 首次无缓存：等待网络授权 → 拉源 → 失败自动重试（无需手动换源）
     private func beginBootstrapLoad() {
-        retryTask?.cancel()
+        isBootstrapping = true
         if NetworkMonitor.shared.isSatisfied {
-            loadChannels(force: true, silent: false, preferActiveOnly: true)
+            bootstrapMessage = "正在加载频道列表..."
+            showIndicator("加载中...")
+            loadChannels(force: true, silent: false, preferActiveOnly: false)
+            scheduleRetryLoads()
             return
         }
-        bootstrapMessage = "等待网络连接（请允许访问网络）..."
-        showIndicator("等待网络...")
-        // 同时尝试拉一次（部分机型 path 报告滞后）
+        bootstrapMessage = "等待网络权限（请点「允许」）..."
+        showIndicator("等待网络权限...")
+        // 仍尝试一次（部分机型 path 滞后）；失败后由 scheduleRetry + onSatisfied 接管
         loadChannels(force: true, silent: false, preferActiveOnly: true)
         scheduleRetryLoads()
     }

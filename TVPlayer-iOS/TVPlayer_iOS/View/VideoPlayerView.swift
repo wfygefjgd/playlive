@@ -2,8 +2,7 @@ import SwiftUI
 import AVKit
 import UIKit
 
-/// 真正全屏：layer 永远等于 window.bounds，videoGravity = resizeAspectFill
-/// 解决「中间一小块、四边黑框」——那是容器没铺满，不是直播天生如此。
+/// 强制铺满：resize 拉伸填满整个 bounds（允许变形，先验证全屏效果）
 final class PlayerContainerView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
 
@@ -13,7 +12,8 @@ final class PlayerContainerView: UIView {
         get { playerLayer.player }
         set {
             playerLayer.player = newValue
-            applyFill()
+            playerLayer.videoGravity = .resize
+            playerLayer.backgroundColor = UIColor.black.cgColor
         }
     }
 
@@ -24,36 +24,21 @@ final class PlayerContainerView: UIView {
         clipsToBounds = true
         isUserInteractionEnabled = false
         autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        applyFill()
+        playerLayer.videoGravity = .resize
+        playerLayer.backgroundColor = UIColor.black.cgColor
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    private func applyFill() {
-        playerLayer.videoGravity = .resizeAspectFill
-        playerLayer.backgroundColor = UIColor.black.cgColor
-        playerLayer.masksToBounds = true
-    }
-
     override func layoutSubviews() {
         super.layoutSubviews()
-        // 强制与父视图同大，禁止系统动画导致短暂缩在中间
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        if playerLayer.superlayer !== layer {
-            layer.addSublayer(playerLayer)
-        }
         playerLayer.frame = bounds
-        playerLayer.videoGravity = .resizeAspectFill
+        playerLayer.videoGravity = .resize
         CATransaction.commit()
-    }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        setNeedsLayout()
-        layoutIfNeeded()
     }
 }
 
@@ -71,10 +56,5 @@ struct VideoPlayerView: UIViewRepresentable {
             uiView.player = vm.player.player
         }
         uiView.setNeedsLayout()
-        uiView.layoutIfNeeded()
-    }
-
-    static func dismantleUIView(_ uiView: PlayerContainerView, coordinator: ()) {
-        uiView.player = nil
     }
 }
