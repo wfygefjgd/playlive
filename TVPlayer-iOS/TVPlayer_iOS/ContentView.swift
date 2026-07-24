@@ -58,7 +58,7 @@ struct ContentView: View {
                 VStack(spacing: 12) {
                     Text("暂无频道")
                         .foregroundColor(.white)
-                    Button("重新加载源") { vm.retryLoadSources() }
+                    Button("重新加载�?) { vm.retryLoadSources() }
                         .buttonStyle(.borderedProminent)
                 }
                 .padding(24)
@@ -122,7 +122,13 @@ struct ContentView: View {
             SourceManagementSheet()
                 .environmentObject(vm)
         }
-        .modifier(KeyboardHandler(handleKeyPress: handleKeyPress))
+        .then { base in
+            if #available(iOS 17.0, *) {
+                return AnyView(base.onKeyPress(handleKeyPress))
+            } else {
+                return AnyView(base)
+            }
+        }
     }
 
     private var floatingButtons: some View {
@@ -138,7 +144,7 @@ struct ContentView: View {
             Button("取消", role: .cancel) { }
             Button("删除", role: .destructive) { vm.doDeleteLine() }
         } message: {
-            Text("确定删除当前线路？")
+            Text("确定删除当前线路�?)
         }
     }
 
@@ -183,6 +189,7 @@ struct ContentView: View {
 
     // MARK: - 数字键选台
 
+    @available(iOS 17.0, *)
     private func handleKeyPress(_ press: KeyPress) -> KeyPress.Result {
         guard !vm.panelVisible else { return .ignored }
 
@@ -248,8 +255,7 @@ struct ContentView: View {
             guard !Task.isCancelled else { return }
             await MainActor.run { confirmNumberInput() }
         }
-        // 超过 4 位自动确认
-        if numberInput.count >= 4 {
+        // 超过 4 位自动确�?        if numberInput.count >= 4 {
             confirmNumberInput()
         }
     }
@@ -275,86 +281,9 @@ struct ContentView: View {
     }
 }
 
-private struct KeyboardHandler: ViewModifier {
-    @EnvironmentObject private var vm: PlayerViewModel
-    let handleKeyPress: (KeyPress) -> KeyPress.Result
-
-    func body(content: Content) -> some View {
-        if #available(iOS 17.0, *) {
-            content.onKeyPress { press in
-                guard !vm.panelVisible else { return .ignored }
-                return handleKeyPress(press)
-            }
-        } else {
-            content.background(
-                KeyCommandView(onKeyCommand: { key in
-                    guard !vm.panelVisible else { return false }
-                    return Self.handleCommand(key, handleKeyPress: handleKeyPress, vm: vm)
-                })
-            )
-        }
+private extension View {
+    @ViewBuilder
+    func then<Content: View>(_ transform: (Self) -> Content) -> some View {
+        transform(self)
     }
-
-    @MainActor
-    static func handleCommand(_ key: String, handleKeyPress: (KeyPress) -> KeyPress.Result, vm: PlayerViewModel) -> Bool {
-        return false
-    }
-}
-
-private struct KeyCommandView: UIViewControllerRepresentable {
-    let onKeyCommand: (String) -> Bool
-
-    func makeUIViewController(context: Context) -> KeyCommandViewController {
-        let vc = KeyCommandViewController()
-        vc.onKeyCommand = onKeyCommand
-        return vc
-    }
-
-    func updateUIViewController(_ uiViewController: KeyCommandViewController, context: Context) {
-        uiViewController.onKeyCommand = onKeyCommand
-    }
-}
-
-private final class KeyCommandViewController: UIViewController {
-    var onKeyCommand: ((String) -> Bool)?
-
-    override var canBecomeFirstResponder: Bool { true }
-
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        becomeFirstResponder()
-    }
-
-    override var keyCommands: [UIKeyCommand]? {
-        return [
-            UIKeyCommand(input: UIKeyCommand.inputUpArrow, modifierFlags: [], action: #selector(handleUp:)),
-            UIKeyCommand(input: UIKeyCommand.inputDownArrow, modifierFlags: [], action: #selector(handleDown:)),
-            UIKeyCommand(input: UIKeyCommand.inputLeftArrow, modifierFlags: [], action: #selector(handleLeft:)),
-            UIKeyCommand(input: UIKeyCommand.inputRightArrow, modifierFlags: [], action: #selector(handleRight:)),
-            UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(handleReturn:)),
-            UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(handleEscape:)),
-            UIKeyCommand(input: UIKeyCommand.inputDelete, modifierFlags: [], action: #selector(handleDelete:)),
-            UIKeyCommand(input: " ", modifierFlags: [], action: #selector(handleSpace:)),
-            UIKeyCommand(input: "0", modifierFlags: [], action: #selector(handleDigit:)),
-            UIKeyCommand(input: "1", modifierFlags: [], action: #selector(handleDigit:)),
-            UIKeyCommand(input: "2", modifierFlags: [], action: #selector(handleDigit:)),
-            UIKeyCommand(input: "3", modifierFlags: [], action: #selector(handleDigit:)),
-            UIKeyCommand(input: "4", modifierFlags: [], action: #selector(handleDigit:)),
-            UIKeyCommand(input: "5", modifierFlags: [], action: #selector(handleDigit:)),
-            UIKeyCommand(input: "6", modifierFlags: [], action: #selector(handleDigit:)),
-            UIKeyCommand(input: "7", modifierFlags: [], action: #selector(handleDigit:)),
-            UIKeyCommand(input: "8", modifierFlags: [], action: #selector(handleDigit:)),
-            UIKeyCommand(input: "9", modifierFlags: [], action: #selector(handleDigit:)),
-        ]
-    }
-
-    @objc private func handleUp(_ sender: UIKeyCommand) { _ = onKeyCommand?("up") }
-    @objc private func handleDown(_ sender: UIKeyCommand) { _ = onKeyCommand?("down") }
-    @objc private func handleLeft(_ sender: UIKeyCommand) { _ = onKeyCommand?("left") }
-    @objc private func handleRight(_ sender: UIKeyCommand) { _ = onKeyCommand?("right") }
-    @objc private func handleReturn(_ sender: UIKeyCommand) { _ = onKeyCommand?("return") }
-    @objc private func handleEscape(_ sender: UIKeyCommand) { _ = onKeyCommand?("escape") }
-    @objc private func handleDelete(_ sender: UIKeyCommand) { _ = onKeyCommand?("delete") }
-    @objc private func handleSpace(_ sender: UIKeyCommand) { _ = onKeyCommand?("space") }
-    @objc private func handleDigit(_ sender: UIKeyCommand) { _ = onKeyCommand?(sender.input ?? "") }
 }
