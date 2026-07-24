@@ -41,6 +41,10 @@ final class PlayerEngine: ObservableObject {
     var onStartupTimeout: (() -> Void)?
     var onPlaybackStall: (() -> Void)?
     var onSilentAudio: (() -> Void)?
+    var onExtendedStall: (() -> Void)?
+
+    private var stallPollTask: Task<Void, Never>?
+    private var consecutiveStallCount = 0
 
     init() {
         player.actionAtItemEnd = .none
@@ -58,6 +62,7 @@ final class PlayerEngine: ObservableObject {
         statusObserver = nil
 
         resetState(for: token)
+        startStallPolling(token: token)
 
         let asset = AVURLAsset(url: url, options: [
             AVURLAssetPreferPreciseDurationAndTimingKey: false,
@@ -103,6 +108,7 @@ final class PlayerEngine: ObservableObject {
             timeObserver = nil
         }
         cancelAllTasks()
+        stopStallPolling()
         player.replaceCurrentItem(with: nil)
         isPlaying = false
         isReady = false
@@ -337,6 +343,35 @@ final class PlayerEngine: ObservableObject {
         return !audioTracks.isEmpty
     }
 
+    // MARK: - Private — Stall Polling
+
+    private func startStallPolling(token: Int) {
+        stopStallPolling()
+        consecutiveStallCount = 0
+        stallPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard let self, self.playToken == token, !Task.isCancelled else { return }
+                guard self.isReady else { continue }
+                if self.isStalled() {
+                    self.consecutiveStallCount += 1
+                    if self.consecutiveStallCount >= 2 {
+                        self.consecutiveStallCount = 0
+                        self.onExtendedStall?()
+                    }
+                } else {
+                    self.consecutiveStallCount = 0
+                }
+            }
+        }
+    }
+
+    private func stopStallPolling() {
+        stallPollTask?.cancel()
+        stallPollTask = nil
+        consecutiveStallCount = 0
+    }
+
     // MARK: - Private — Task Helpers
 
     private func cancelTask(named name: String) {
@@ -350,11 +385,16 @@ final class PlayerEngine: ObservableObject {
         if player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
             return true
         }
-        // 使用局部变量避免多线程访问冲突
+        if player.timeControlStatus == .playing && player.rate == 0 {
+            return true
+        }
         let progressAt = lastTimeProgressAt
         let rendered = hasRendered
         if rendered && progressAt != .distantPast,
            Date().timeIntervalSince(progressAt) > 3.5 {
+            return true
+        }
+        if rendered && progressAt == .distantPast {
             return true
         }
         return false
