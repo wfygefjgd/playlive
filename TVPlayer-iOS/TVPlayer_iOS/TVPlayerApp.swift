@@ -72,7 +72,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
                 }
             }
         }
-        WindowVideoSurface.shared.install()
+        WindowVideoSurface.shared.install(reason: "app-active")
         NotificationCenter.default.post(name: .tvPlayerNeedsRelayout, object: nil)
     }
 }
