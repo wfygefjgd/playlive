@@ -6,12 +6,20 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
+            // Video under everything (including Home Indicator overlay)
             VideoPlayerView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(.all, edges: .all)
+                .allowsHitTesting(false)
+
+            // Helps system treat Home Indicator as overlay (auto-hide when possible)
+            HomeIndicatorConfigurator()
+                .frame(width: 0, height: 0)
                 .allowsHitTesting(false)
 
             if !vm.panelVisible {
                 Color.clear
+                    .ignoresSafeArea(.all, edges: .all)
                     .contentShape(Rectangle())
                     .onTapGesture { vm.showFloat() }
                     .simultaneousGesture(playerDragGesture())
@@ -33,7 +41,6 @@ struct ContentView: View {
                 .zIndex(50)
             }
 
-            // bootstrap：只一层中文引导
             if vm.isBootstrapping {
                 VStack(spacing: 10) {
                     ProgressView()
@@ -64,23 +71,26 @@ struct ContentView: View {
             ChannelOSDView(text: vm.channelOSD)
                 .allowsHitTesting(false)
                 .zIndex(5)
-            // bootstrap 期间不显示 Indicator，防叠字
             if !vm.isBootstrapping {
                 IndicatorView(text: vm.indicatorText)
                     .allowsHitTesting(false)
                     .zIndex(5)
             }
 
+            // Controls stay above Home Indicator with safe-area padding
             if vm.showFloatOverlay || vm.locked {
                 floatingButtons
                     .padding(.top, 12)
-                    .padding(.bottom, 20)
+                    .safeAreaPadding(.bottom, 8)
                     .zIndex(60)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
         .ignoresSafeArea(.all, edges: .all)
+        // Home Indicator overlays content; hide when idle if system allows
+        .persistentSystemOverlays(.hidden)
+        .defersSystemGestures(on: .all)
         .onAppear {
             vm.startup()
             DispatchQueue.main.async {
@@ -117,10 +127,6 @@ struct ContentView: View {
         }
     }
 
-    /// 手势分区：
-    /// - 右侧 35%：仅上下滑 → 音量
-    /// - 中间 30%：仅上下滑 → 换台
-    /// - 全屏横滑（位移够大）：切线路（不与右侧竖滑抢）
     private func playerDragGesture() -> some Gesture {
         DragGesture(minimumDistance: 24)
             .onChanged { value in
@@ -129,7 +135,6 @@ struct ContentView: View {
                 let sx = value.startLocation.x
                 let dx = value.translation.width
                 let dy = value.translation.height
-                // 明确竖滑且在右侧 → 音量
                 guard abs(dy) > abs(dx), sx > w * 0.65 else { return }
                 vm.handleVolumeDrag(translationHeight: dy, ended: false)
             }
@@ -144,14 +149,12 @@ struct ContentView: View {
                     vm.handleVolumeDrag(translationHeight: dy, ended: true)
                 }
 
-                // 横滑优先判切线（阈值更高）
                 if abs(dx) > abs(dy), abs(dx) > 50 {
                     if dx > 0 { vm.switchSource(direction: -1) }
                     else { vm.switchSource(direction: 1) }
                     return
                 }
 
-                // 中间区域竖滑换台（避开右侧音量区）
                 if abs(dy) > abs(dx), abs(dy) > 40, sx >= w * 0.30, sx <= w * 0.65 {
                     if dy < 0 { vm.nextChannel() }
                     else { vm.prevChannel() }

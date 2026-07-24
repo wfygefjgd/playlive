@@ -3,14 +3,16 @@ import AVKit
 import UIKit
 import Combine
 
-/// Stretch full screen + first-launch relayout like resume
+/// Stretch full screen. Video draws under Home Indicator (indicator floats on top).
 final class FullScreenPlayerViewController: UIViewController {
     private let playerLayer = AVPlayerLayer()
     private var cancellables = Set<AnyCancellable>()
     private var delayItems: [DispatchWorkItem] = []
 
+    /// Allow system Home Indicator to auto-hide; when visible it overlays content (does not reserve black space).
     override var prefersHomeIndicatorAutoHidden: Bool { true }
-    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { [.bottom, .top] }
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { [.all] }
+    override var prefersStatusBarHidden: Bool { true }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -36,7 +38,7 @@ final class FullScreenPlayerViewController: UIViewController {
             NotificationCenter.default.publisher(for: name)
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] _ in
-                    self?.applyHomePolicy()
+                    self?.propagateHomeIndicatorPreference()
                     self?.forceRelayout()
                     self?.scheduleRelayoutPasses()
                 }
@@ -48,13 +50,14 @@ final class FullScreenPlayerViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        applyHomePolicy()
+        propagateHomeIndicatorPreference()
         forceRelayout()
         scheduleRelayoutPasses()
     }
 
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
+        // Keep using full window; do not shrink player for Home Indicator inset.
         neutralizeSafeArea()
         layoutPlayer()
     }
@@ -65,11 +68,21 @@ final class FullScreenPlayerViewController: UIViewController {
         layoutPlayer()
     }
 
-    private func applyHomePolicy() {
+    /// Tell ancestors (including UIHostingController) to re-query home indicator policy.
+    private func propagateHomeIndicatorPreference() {
         setNeedsUpdateOfHomeIndicatorAutoHidden()
         setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
+        var r: UIResponder? = self
+        while let cur = r {
+            if let vc = cur as? UIViewController {
+                vc.setNeedsUpdateOfHomeIndicatorAutoHidden()
+                vc.setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
+            }
+            r = cur.next
+        }
     }
 
+    /// Cancel safe-area padding so layout rect includes Home Indicator region.
     private func neutralizeSafeArea() {
         if #available(iOS 11.0, *) {
             let s = view.safeAreaInsets
@@ -86,7 +99,7 @@ final class FullScreenPlayerViewController: UIViewController {
     }
 
     func onPlaybackReady() {
-        applyHomePolicy()
+        propagateHomeIndicatorPreference()
         forceRelayout()
         scheduleRelayoutPasses()
     }
@@ -107,7 +120,7 @@ final class FullScreenPlayerViewController: UIViewController {
         delayItems.removeAll()
         for t in [0.0, 0.05, 0.15, 0.35, 0.7, 1.2, 2.0] {
             let item = DispatchWorkItem { [weak self] in
-                self?.applyHomePolicy()
+                self?.propagateHomeIndicatorPreference()
                 self?.neutralizeSafeArea()
                 self?.layoutPlayer()
             }
@@ -116,18 +129,17 @@ final class FullScreenPlayerViewController: UIViewController {
         }
     }
 
+    /// Always cover physical window (video under Home Indicator; bar floats above).
     private func layoutPlayer() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         if playerLayer.superlayer == nil {
             view.layer.addSublayer(playerLayer)
         }
+
         if let window = view.window {
-            var full = window.bounds
-            let screen = window.screen.bounds
-            if full.width * full.height < screen.width * screen.height * 0.95 {
-                full = screen
-            }
+            // Full window bounds — includes area under Home Indicator
+            let full = window.bounds
             playerLayer.frame = view.convert(full, from: nil)
         } else if view.bounds.width > 2, view.bounds.height > 2 {
             playerLayer.frame = view.bounds
@@ -139,16 +151,45 @@ final class FullScreenPlayerViewController: UIViewController {
                 height: min(b.width, b.height)
             )
         }
+
         if view.bounds.width > 2, view.bounds.height > 2 {
             if playerLayer.frame.width < view.bounds.width - 0.5
                 || playerLayer.frame.height < view.bounds.height - 0.5 {
                 playerLayer.frame = view.bounds
             }
         }
+
         playerLayer.videoGravity = .resize
         playerLayer.isHidden = false
         playerLayer.opacity = 1
         CATransaction.commit()
+    }
+}
+
+/// Forwards home-indicator preference to SwiftUI hosting controller chain.
+private final class HomeIndicatorForwarder: UIViewController {
+    override var prefersHomeIndicatorAutoHidden: Bool { true }
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { .all }
+    override var prefersStatusBarHidden: Bool { true }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        view.isUserInteractionEnabled = false
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        setNeedsUpdateOfHomeIndicatorAutoHidden()
+        setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
+        var r: UIResponder? = self
+        while let cur = r {
+            if let vc = cur as? UIViewController {
+                vc.setNeedsUpdateOfHomeIndicatorAutoHidden()
+                vc.setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
+            }
+            r = cur.next
+        }
     }
 }
 
@@ -172,7 +213,15 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     }
 }
 
+/// Invisible VC that helps host prefer auto-hidden Home Indicator
+struct HomeIndicatorConfigurator: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> HomeIndicatorForwarder {
+        HomeIndicatorForwarder()
+    }
+
+    func updateUIViewController(_ uiViewController: HomeIndicatorForwarder, context: Context) {}
+}
+
 extension Notification.Name {
     static let tvPlayerNeedsRelayout = Notification.Name("tvPlayerNeedsRelayout")
 }
-
