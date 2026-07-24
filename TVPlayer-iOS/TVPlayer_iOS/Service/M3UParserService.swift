@@ -35,7 +35,7 @@ class M3UParserService {
                 if let existing = channels[key] {
                     existing.addUrl(line)
                 } else {
-                    let ch = Channel(name: display, group: group, key: key)
+                    var ch = Channel(name: display, group: group, key: key)
                     ch.addUrl(line)
                     channels[key] = ch
                 }

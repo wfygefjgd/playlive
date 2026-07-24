@@ -346,7 +346,7 @@ final class PlayerViewModel: ObservableObject {
 
     func applyRules(_ input: [Channel]) -> [Channel] {
         input.compactMap { src in
-            let filtered = Channel(name: src.name, group: src.group, key: src.key)
+            var filtered = Channel(name: src.name, group: src.group, key: src.key)
             for url in src.urls {
                 if storage.isLineHidden(url) { continue }
                 filtered.addUrl(url)

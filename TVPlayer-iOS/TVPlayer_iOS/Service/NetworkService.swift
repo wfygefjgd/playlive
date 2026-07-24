@@ -183,7 +183,7 @@ final class NetworkService {
             guard let self else { return }
             var attempt = 0
             while attempt < maxRetries, !Task.isCancelled {
-                let (channels, error) = await self.fetchWithCandidates(urls: urls)
+                let (channels, _) = await self.fetchWithCandidates(urls: urls)
                 if !channels.isEmpty {
                     await MainActor.run { onResult(channels, nil) }
                     return

@@ -1,7 +1,7 @@
 import SwiftUI
 import AVFoundation
 import UIKit
-import BackgroundTasks
+import MediaPlayer
 
 @main
 struct TVPlayerApp: App {
@@ -77,19 +77,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     private func setupRemoteCommands() {
         let center = MPRemoteCommandCenter.shared()
 
-        center.playCommand.addTarget { [weak self] _ in
+        center.playCommand.addTarget { [weak self] (_: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus in
             NotificationCenter.default.post(name: .tvPlayerRemotePlay, object: nil)
             return .success
         }
-        center.pauseCommand.addTarget { [weak self] _ in
+        center.pauseCommand.addTarget { [weak self] (_: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus in
             NotificationCenter.default.post(name: .tvPlayerRemotePause, object: nil)
             return .success
         }
-        center.nextTrackCommand.addTarget { [weak self] _ in
+        center.nextTrackCommand.addTarget { [weak self] (_: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus in
             NotificationCenter.default.post(name: .tvPlayerRemoteNext, object: nil)
             return .success
         }
-        center.previousTrackCommand.addTarget { [weak self] _ in
+        center.previousTrackCommand.addTarget { [weak self] (_: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus in
             NotificationCenter.default.post(name: .tvPlayerRemotePrevious, object: nil)
             return .success
         }
