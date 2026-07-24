@@ -5,12 +5,16 @@ import Combine
 @MainActor
 final class PlayerEngine: ObservableObject {
     // MARK: - 配置常量
-    static let startupTimeoutNs: UInt64 = 4_000_000_000      // 4s 起播超时
-    static let stallTimeoutNs: UInt64 = 2_000_000_000         // 2s 卡顿切换
-    static let readyProtectNs: UInt64 = 1_500_000_000         // 1.5s 出画保护
-    static let errorGraceNs: UInt64 = 1_500_000_000           // 1.5s 错误宽容
+    static let startupTimeoutNs: UInt64 = 3_000_000_000      // 3s 起播超时（改为3秒）
+    static let readyProtectNs: UInt64 = 1_000_000_000         // 1s 出画保护（改为1秒）
+    static let errorGraceNs: UInt64 = 1_000_000_000           // 1s 错误宽容（改为1秒）
     static let silentAudioCheckNs: UInt64 = 3_000_000_000     // 3s 后检测静音
     static let silentAudioPollIntervalNs: UInt64 = 500_000_000 // 500ms 轮询间隔
+
+    // 根据网络类型动态调整卡顿阈值 - 更激进的超时
+    static var stallTimeoutNs: UInt64 {
+        NetworkMonitor.shared.isWiFi ? 1_500_000_000 : 2_500_000_000  // WiFi: 1.5s, 蜂窝: 2.5s
+    }
 
     let player = AVPlayer()
     private var cancellables = Set<AnyCancellable>()
@@ -390,8 +394,9 @@ final class PlayerEngine: ObservableObject {
         }
         let progressAt = lastTimeProgressAt
         let rendered = hasRendered
+        // 更激进的黑屏检测：2秒无进度即认为卡顿
         if rendered && progressAt != .distantPast,
-           Date().timeIntervalSince(progressAt) > 3.5 {
+           Date().timeIntervalSince(progressAt) > 2.0 {
             return true
         }
         if rendered && progressAt == .distantPast {

@@ -492,7 +492,7 @@ final class PlayerViewModel: ObservableObject {
         autoSwitchLine(hint: "当前线路无声音，切换下一线路")
     }
 
-    /// 自动切线：同频道内连续试完所有线路
+    /// 自动切线：同频道内连续试完所有线路，如果都失败则切下一频道
     private func autoSwitchLine(hint: String) {
         guard !locked else { return }
         if autoSwitchState == .switching { return }
@@ -502,8 +502,16 @@ final class PlayerViewModel: ObservableObject {
             showIndicator(hint)
             return
         }
-        guard ch.sourceCount > 1 else {
-            showIndicator("当前频道只有一条线路")
+
+        // 如果只有一条线路，直接切下一个频道
+        if ch.sourceCount <= 1 {
+            showIndicator("当前频道只有一条线路，切换下一频道")
+            beginCooldown()
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 800_000_000)  // 0.8秒后切换
+                guard !Task.isCancelled else { return }
+                nextChannel()
+            }
             return
         }
 
@@ -513,12 +521,14 @@ final class PlayerViewModel: ObservableObject {
             nxt = (nxt + 1) % ch.sourceCount
             scanned += 1
         }
+
+        // 所有线路都试过了，切下一个频道
         if triedLineIndices.count >= ch.sourceCount || scanned >= ch.sourceCount {
             autoSwitchState = .idle
-            showIndicator("当前频道所有线路不可用，切下一频道")
+            showIndicator("当前频道所有线路不可用，切换下一频道")
             beginCooldown()
             Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                try? await Task.sleep(nanoseconds: 800_000_000)  // 0.8秒后切换
                 guard !Task.isCancelled else { return }
                 nextChannel()
             }
