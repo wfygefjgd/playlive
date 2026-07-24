@@ -53,17 +53,29 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String DEFAULT_SOURCE_URL = "https://raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8";
-    private static final String[] DEFAULT_MIRRORS = {
-            DEFAULT_SOURCE_URL,
-            "https://ghfast.top/raw.githubusercontent.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
-            "https://raw.gitmirror.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
-            "https://raw.kkgithub.com/best-fan/iptv-sources/master/cn_all_status.m3u8"
+    // 多源配置：6个优质源自动拼接
+    private static final String[] MULTI_SOURCE_URLS = {
+            "best-fan/iptv-sources/master/cn_all_status.m3u8",
+            "fanmingming/live/main/tv/m3u/ipv6.m3u",
+            "YueChan/Live/main/IPTV.m3u",
+            "Supprise0901/TVBox_live/main/live.txt",
+            "vbskycn/iptv/master/tv/tv.m3u",
+            "YanG-1989/m3u/main/Gather.m3u"
     };
+
+    // 镜像加速前缀
+    private static final String[] MIRROR_PREFIXES = {
+            "https://ghfast.top/raw.githubusercontent.com/",
+            "https://raw.gitmirror.com/",
+            "https://raw.kkgithub.com/",
+            "https://gcore.jsdelivr.net/gh/"
+    };
+
     private static final long CHANNEL_OSD_MS = 2500L;
-    private static final long CHANNEL_SWITCH_TIMEOUT_MS = 7000L;
-    private static final long STALL_TIMEOUT_MS = 7000L;
-    private static final long NETWORK_WAIT_RETRY_MS = 1000L;
+    private static final long CHANNEL_SWITCH_TIMEOUT_MS = 3000L;      // 3秒快速切换
+    private static final long STALL_TIMEOUT_MS = 2500L;               // 2.5秒卡顿检测
+    private static final long FAST_FAIL_TIMEOUT_MS = 1500L;           // 1.5秒快速失败
+    private static final long NETWORK_WAIT_RETRY_MS = 500L;           // 0.5秒快速重试
     private static final long FLOAT_BUTTONS_TIMEOUT_MS = 2500L;
 
     private PlayerView playerView;
@@ -98,15 +110,23 @@ public class MainActivity extends AppCompatActivity {
     private boolean loading = false;
     private boolean waitingForReady = false;
     private float brightness = 0.5f;
+    private long pendingStallTimeoutMs = CHANNEL_SWITCH_TIMEOUT_MS;
+
+    // 新增成员变量：网络检测
+    private ConnectivityManager connectivityManager;
+    private boolean isNetworkSlow = false;
     private int playbackToken = 0;
-    private String activeSourceUrl = DEFAULT_SOURCE_URL;
+    private String activeSourceUrl = "";
     private boolean autoSwitchingSource = false;
     private boolean currentPlaybackReachedReady = false;
-    private long pendingStallTimeoutMs = CHANNEL_SWITCH_TIMEOUT_MS;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // 设置沉浸式全屏
+        setupImmersiveMode();
+
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(
                 WindowManager.LayoutParams.FLAG_FULLSCREEN,
@@ -122,8 +142,17 @@ public class MainActivity extends AppCompatActivity {
         }
 
         setContentView(R.layout.activity_main);
+
+        // 再次应用沉浸式
+        applyImmersiveMode();
+
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
         storage = new StorageHelper(this);
+
+        // 初始化网络管理器和检测
+        connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        checkNetworkSpeed();
+
         restoreSourceState();
 
         bindViews();
@@ -489,25 +518,19 @@ public class MainActivity extends AppCompatActivity {
         loading = true;
         waitingForReady = false;
         cancelStallCheck();
-        status.setText(getString(R.string.loading));
-        netPool.execute(() -> {
-            List<Channel> loaded = fetchChannels();
-            mainHandler.post(() -> {
-                loading = false;
-                channels.clear();
-                channels.addAll(applyChannelLineRules(loaded));
-                adapter.setData(channels);
-                if (channels.isEmpty()) {
-                    status.setText(getString(R.string.load_failed));
-                    Toast.makeText(this, getString(R.string.load_failed), Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                status.setText("已加载 " + channels.size() + " 个频道");
-                currentIndex = 0;
-                currentSourceIndex = 0;
-                playCurrent(false, CHANNEL_SWITCH_TIMEOUT_MS);
-            });
-        });
+
+        // 先从缓存加载
+        List<Channel> cached = storage.loadChannels();
+        if (!cached.isEmpty()) {
+            channels.clear();
+            channels.addAll(cached);
+            adapter.setData(channels);
+            status.setText(String.format("已加载 %d 个频道（缓存）", channels.size()));
+            playCurrent(false, CHANNEL_SWITCH_TIMEOUT_MS);
+        }
+
+        // 后台刷新多源
+        loadChannelsFromMultiSources();
     }
 
     private List<Channel> fetchChannels() {
@@ -528,11 +551,15 @@ public class MainActivity extends AppCompatActivity {
 
     private List<String> buildSourceCandidates() {
         List<String> urls = new ArrayList<>();
-        urls.add(activeSourceUrl);
-        if (DEFAULT_SOURCE_URL.equals(activeSourceUrl)) {
-            for (String mirror : DEFAULT_MIRRORS) {
-                if (!urls.contains(mirror)) {
-                    urls.add(mirror);
+        if (!activeSourceUrl.isEmpty()) {
+            urls.add(activeSourceUrl);
+        }
+        // 如果activeSourceUrl为空或加载失败，尝试所有镜像源
+        for (String sourceUrl : MULTI_SOURCE_URLS) {
+            for (String prefix : MIRROR_PREFIXES) {
+                String fullUrl = prefix + sourceUrl;
+                if (!urls.contains(fullUrl)) {
+                    urls.add(fullUrl);
                 }
             }
         }
@@ -628,16 +655,11 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
             String target = dialogSources.get(idx);
-            if (DEFAULT_SOURCE_URL.equals(target)) {
-                showIndicator("默认源不能删除");
-                return;
-            }
             dialogSources.remove(idx);
             sourceUrls.clear();
-            sourceUrls.add(DEFAULT_SOURCE_URL);
             sourceUrls.addAll(dialogSources);
             if (target.equals(activeSourceUrl)) {
-                activeSourceUrl = DEFAULT_SOURCE_URL;
+                activeSourceUrl = dialogSources.isEmpty() ? "" : dialogSources.get(0);
                 persistSourceState();
                 adapter.notifyDataSetChanged();
                 dialog.dismiss();
@@ -700,7 +722,6 @@ public class MainActivity extends AppCompatActivity {
 
     private void restoreSourceState() {
         LinkedHashSet<String> urls = new LinkedHashSet<>();
-        urls.add(DEFAULT_SOURCE_URL);
         urls.addAll(storage.loadSourceUrls());
         String legacy = storage.loadCustomSourceUrl();
         if (legacy != null && !legacy.trim().isEmpty()) {
@@ -715,7 +736,7 @@ public class MainActivity extends AppCompatActivity {
                 sourceUrls.add(activeSourceUrl);
             }
         } else {
-            activeSourceUrl = DEFAULT_SOURCE_URL;
+            activeSourceUrl = "";
         }
         persistSourceState();
     }
@@ -1075,5 +1096,218 @@ public class MainActivity extends AppCompatActivity {
                             | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                             | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
         }
+    }
+
+    /**
+     * 检测网络速度
+     */
+    private void checkNetworkSpeed() {
+        NetworkInfo activeNetwork = connectivityManager.getActiveNetworkInfo();
+        if (activeNetwork != null && activeNetwork.isConnected()) {
+            if (activeNetwork.getType() == ConnectivityManager.TYPE_MOBILE) {
+                isNetworkSlow = true;
+                pendingStallTimeoutMs = FAST_FAIL_TIMEOUT_MS;
+                showIndicator("移动网络，快速切换模式");
+            } else {
+                isNetworkSlow = false;
+                pendingStallTimeoutMs = CHANNEL_SWITCH_TIMEOUT_MS;
+            }
+        } else {
+            isNetworkSlow = true;
+            pendingStallTimeoutMs = FAST_FAIL_TIMEOUT_MS;
+        }
+    }
+
+    /**
+     * 从多个源加载并合并频道
+     */
+    private void loadChannelsFromMultiSources() {
+        showIndicator("正在加载多个直播源...");
+        status.setText("加载中，请稍候...");
+
+        netPool.execute(() -> {
+            List<Channel> allChannels = new ArrayList<>();
+            LinkedHashSet<String> seenUrls = new LinkedHashSet<>();
+
+            int successCount = 0;
+            int totalSources = MULTI_SOURCE_URLS.length;
+
+            for (int i = 0; i < MULTI_SOURCE_URLS.length; i++) {
+                String sourceUrl = MULTI_SOURCE_URLS[i];
+                final int index = i + 1;
+
+                mainHandler.post(() ->
+                    showIndicator(String.format("加载源 %d/%d", index, totalSources))
+                );
+
+                for (String prefix : MIRROR_PREFIXES) {
+                    String fullUrl = prefix + sourceUrl;
+
+                    try {
+                        URL url = new URL(fullUrl);
+                        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                        conn.setConnectTimeout(5000);
+                        conn.setReadTimeout(10000);
+                        conn.setRequestProperty("User-Agent", "TVPlayer/1.0");
+
+                        if (conn.getResponseCode() == 200) {
+                            BufferedReader reader = new BufferedReader(
+                                new InputStreamReader(conn.getInputStream())
+                            );
+
+                            StringBuilder sb = new StringBuilder();
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                sb.append(line).append("\n");
+                            }
+
+                            List<Channel> sourceChannels = M3UParser.parse(sb.toString());
+
+                            for (Channel channel : sourceChannels) {
+                                if (channel.getUrls().isEmpty()) continue;
+
+                                String firstUrl = channel.getUrls().get(0);
+                                if (!seenUrls.contains(firstUrl) && isQualityUrl(firstUrl)) {
+                                    allChannels.add(channel);
+                                    seenUrls.add(firstUrl);
+                                }
+                            }
+
+                            successCount++;
+                            break;
+                        }
+                    } catch (Exception e) {
+                        continue;
+                    }
+                }
+            }
+
+            List<Channel> mergedChannels = mergeChannelsByName(allChannels);
+
+            final int finalSuccessCount = successCount;
+            mainHandler.post(() -> {
+                loading = false;
+                if (mergedChannels.isEmpty()) {
+                    status.setText("加载失败，请检查网络");
+                    showIndicator("所有源均加载失败");
+                } else {
+                    channels.clear();
+                    channels.addAll(applyChannelLineRules(mergedChannels));
+                    adapter.setData(channels);
+                    storage.saveChannels(channels);
+
+                    status.setText(String.format(
+                        "加载成功：%d 个频道（来自 %d/%d 个源）",
+                        channels.size(), finalSuccessCount, totalSources
+                    ));
+
+                    if (currentIndex >= channels.size()) {
+                        currentIndex = 0;
+                    }
+                    playCurrent(false, CHANNEL_SWITCH_TIMEOUT_MS);
+                }
+            });
+        });
+    }
+
+    /**
+     * URL 质量筛选
+     */
+    private boolean isQualityUrl(String url) {
+        if (url == null || url.isEmpty()) return false;
+
+        String lower = url.toLowerCase();
+
+        // 排除测试链接
+        if (lower.contains("test") || lower.contains("demo") || lower.contains("example")) {
+            return false;
+        }
+
+        // 排除非标准端口
+        if (lower.matches(".*:\\d{5,}.*")) {
+            return false;
+        }
+
+        // 只接受常见协议
+        return lower.startsWith("http://") || lower.startsWith("https://") ||
+               lower.startsWith("rtmp://") || lower.startsWith("rtsp://");
+    }
+
+    /**
+     * 合并同名频道
+     */
+    private List<Channel> mergeChannelsByName(List<Channel> channels) {
+        java.util.Map<String, Channel> mergedMap = new java.util.LinkedHashMap<>();
+
+        for (Channel channel : channels) {
+            String key = channel.name.trim().toLowerCase();
+
+            if (mergedMap.containsKey(key)) {
+                Channel existing = mergedMap.get(key);
+                for (String url : channel.getUrls()) {
+                    existing.addUrl(url);
+                }
+            } else {
+                mergedMap.put(key, channel);
+            }
+        }
+
+        return new ArrayList<>(mergedMap.values());
+    }
+
+    /**
+     * 设置沉浸式全屏模式
+     */
+    private void setupImmersiveMode() {
+        Window window = getWindow();
+        View decorView = window.getDecorView();
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false);
+            android.view.WindowInsetsController controller = window.getInsetsController();
+            if (controller != null) {
+                controller.hide(android.view.WindowInsets.Type.statusBars() | android.view.WindowInsets.Type.navigationBars());
+                controller.setSystemBarsBehavior(
+                    android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                );
+            }
+        } else {
+            int flags = View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
+            decorView.setSystemUiVisibility(flags);
+        }
+    }
+
+    /**
+     * 应用沉浸式模式
+     */
+    private void applyImmersiveMode() {
+        Window window = getWindow();
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.view.WindowInsetsController controller = window.getInsetsController();
+            if (controller != null) {
+                controller.hide(android.view.WindowInsets.Type.statusBars() | android.view.WindowInsets.Type.navigationBars());
+            }
+        } else {
+            window.getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            );
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        applyImmersiveMode();
     }
 }
