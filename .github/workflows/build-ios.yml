@@ -40,27 +40,40 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
 
+      - name: Get version from tag
+        id: get_version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+            VERSION=${VERSION%-ios}
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          else
+            # 从 project.yml 读取版本号
+            VERSION=$(grep "MARKETING_VERSION:" TVPlayer-iOS/project.yml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+
       - name: Export IPA
         working-directory: TVPlayer-iOS
         run: |
           mkdir -p build/Payload
           cp -r build/TVPlayer.xcarchive/Products/Applications/TVPlayer_iOS.app build/Payload/
           cd build
-          zip -r TVPlayer-v1.4.6-ios.ipa Payload
+          zip -r TVPlayer-v${{ steps.get_version.outputs.version }}-ios.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: TVPlayer-iOS
-          path: TVPlayer-iOS/build/TVPlayer-v1.4.6-ios.ipa
+          path: TVPlayer-iOS/build/TVPlayer-v${{ steps.get_version.outputs.version }}-ios.ipa
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: TVPlayer-iOS/build/TVPlayer-v1.4.6-ios.ipa
+          files: TVPlayer-iOS/build/TVPlayer-v${{ steps.get_version.outputs.version }}-ios.ipa
           body: |
-            # TVPlayer iOS v1.4.6
+            # TVPlayer iOS v${{ steps.get_version.outputs.version }}
 
             ## 🎉 主要功能
 
@@ -74,7 +87,7 @@ jobs:
 
             ## 📦 安装说明
 
-            1. 下载 TVPlayer-v1.4.6-ios.ipa
+            1. 下载 TVPlayer-v${{ steps.get_version.outputs.version }}-ios.ipa
             2. 使用 Sideloadly 或 AltStore 侧载安装
             3. 系统要求: iOS 16.0+
 
@@ -82,6 +95,6 @@ jobs:
 
             免费 Apple ID 签名每 7 天需重签一次
 
-            详见: TVPlayer-iOS/RELEASE_NOTES.md
+            详见: RELEASE_NOTES_iOS_v${{ steps.get_version.outputs.version }}.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
