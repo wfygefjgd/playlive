@@ -6,20 +6,15 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            // Video under everything (including Home Indicator overlay)
+            // MUST be clear — video is on UIWindow behind SwiftUI
+            Color.clear
+
             VideoPlayerView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .ignoresSafeArea(.all, edges: .all)
-                .allowsHitTesting(false)
-
-            // Helps system treat Home Indicator as overlay (auto-hide when possible)
-            HomeIndicatorConfigurator()
-                .frame(width: 0, height: 0)
                 .allowsHitTesting(false)
 
             if !vm.panelVisible {
                 Color.clear
-                    .ignoresSafeArea(.all, edges: .all)
                     .contentShape(Rectangle())
                     .onTapGesture { vm.showFloat() }
                     .simultaneousGesture(playerDragGesture())
@@ -77,18 +72,17 @@ struct ContentView: View {
                     .zIndex(5)
             }
 
-            // Controls stay above Home Indicator with safe-area padding
+            // Controls stay ABOVE home indicator with extra bottom padding
             if vm.showFloatOverlay || vm.locked {
                 floatingButtons
                     .padding(.top, 12)
-                    .padding(.bottom, 24)
+                    .padding(.bottom, 28)
                     .zIndex(60)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black)
+        .background(Color.clear)
         .ignoresSafeArea(.all, edges: .all)
-        // Home Indicator overlays content; hide when idle if system allows
         .persistentSystemOverlays(.hidden)
         .defersSystemGestures(on: .all)
         .onAppear {
@@ -103,6 +97,7 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             vm.resume()
             vm.onAppBecameActive()
+            NotificationCenter.default.post(name: .tvPlayerNeedsRelayout, object: nil)
         }
         .sheet(isPresented: $vm.showSourceSheet) {
             SourceManagementSheet()
@@ -144,17 +139,14 @@ struct ContentView: View {
                 let sx = value.startLocation.x
                 let dx = value.translation.width
                 let dy = value.translation.height
-
                 if sx > w * 0.65 {
                     vm.handleVolumeDrag(translationHeight: dy, ended: true)
                 }
-
                 if abs(dx) > abs(dy), abs(dx) > 50 {
                     if dx > 0 { vm.switchSource(direction: -1) }
                     else { vm.switchSource(direction: 1) }
                     return
                 }
-
                 if abs(dy) > abs(dx), abs(dy) > 40, sx >= w * 0.30, sx <= w * 0.65 {
                     if dy < 0 { vm.nextChannel() }
                     else { vm.prevChannel() }
