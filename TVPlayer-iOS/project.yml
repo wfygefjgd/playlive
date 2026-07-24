@@ -38,6 +38,8 @@ targets:
         NSLocalNetworkUsageDescription: "用于加载直播源与频道列表"
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        UIBackgroundModes:
+          - audio
     settings:
       base:
         INFOPLIST_FILE: TVPlayer_iOS/Info.plist

@@ -7,6 +7,7 @@ private let CHANNEL_OSD_MS: UInt64 = 2_500_000_000
 private let FLOAT_HIDE_MS: UInt64 = 2_500_000_000
 private let INDICATOR_MS: UInt64 = 1_200_000_000
 private let AUTO_SWITCH_COOLDOWN_NS: UInt64 = 4_000_000_000
+private let SILENT_AUDIO_GRACE_NS: UInt64 = 5_000_000_000  // 5s 静音切换冷却
 
 let PRESET_SOURCES: [(name: String, url: String)] = [
     ("默认源", DEFAULT_SOURCE_URL),
@@ -37,7 +38,6 @@ final class PlayerViewModel: ObservableObject {
     @Published var favorites: Set<String> = []
     @Published var isBootstrapping = false
     @Published var bootstrapMessage = "正在连接网络..."
-    /// 驱动播放层 relayout（ready / 回前台）
     @Published var playerLayoutEpoch: Int = 0
 
     let player = PlayerEngine()
@@ -48,37 +48,33 @@ final class PlayerViewModel: ObservableObject {
     private var autoSwitchState: AutoSwitchState = .idle
     private var started = false
     private var triedLineIndices = Set<Int>()
+
+    // 统一任务管理
     private var osdTask: Task<Void, Never>?
     private var indTask: Task<Void, Never>?
     private var floatTask: Task<Void, Never>?
     private var cooldownTask: Task<Void, Never>?
     private var retryTask: Task<Void, Never>?
+    private var silentAudioTask: Task<Void, Never>?
+
     private var lastVolumeTranslation: CGFloat = 0
-    private var loadGeneration = 0
+    private var lastSilentSwitchAt: Date = .distantPast
 
     func startup() {
         guard !started else { return }
         started = true
         favorites = storage.loadFavorites()
 
-        player.onReady = { [weak self] in
-            Task { @MainActor in self?.onPlayerReady() }
-        }
-        player.onError = { [weak self] in
-            Task { @MainActor in self?.onPlayerError() }
-        }
-        player.onStartupTimeout = { [weak self] in
-            Task { @MainActor in self?.onStartupTimeout() }
-        }
-        player.onPlaybackStall = { [weak self] in
-            Task { @MainActor in self?.onPlaybackStall() }
-        }
+        // PlayerViewModel 已是 @MainActor，闭包回调无需再切主线程
+        player.onReady = { [weak self] in self?.onPlayerReady() }
+        player.onError = { [weak self] in self?.onPlayerError() }
+        player.onStartupTimeout = { [weak self] in self?.onStartupTimeout() }
+        player.onPlaybackStall = { [weak self] in self?.onPlaybackStall() }
+        player.onSilentAudio = { [weak self] in self?.onSilentAudio() }
 
-        // 网络从无到有 / 首次点「允许」后自动再拉源
-        NetworkMonitor.shared.onSatisfied = { [weak self] in
-            Task { @MainActor in
-                self?.onNetworkBecameAvailable()
-            }
+        NetworkMonitor.shared.onSatisfied = { [weak self] in self?.onNetworkBecameAvailable() }
+        NetworkMonitor.shared.onConnectionTypeChanged = { [weak self] type in
+            self?.onConnectionTypeChanged(type)
         }
 
         restoreSources()
@@ -97,7 +93,8 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
-    /// 首次无缓存：等待网络授权 → 拉源 → 失败自动重试（无需手动换源）
+    // MARK: - 加载逻辑
+
     private func beginBootstrapLoad() {
         isBootstrapping = true
         indicatorText = ""
@@ -113,10 +110,8 @@ final class PlayerViewModel: ObservableObject {
     }
 
     private func scheduleRetryLoads() {
-        // 已有重试任务在跑则不叠加
         if let t = retryTask, !t.isCancelled { return }
         retryTask = Task { @MainActor in
-            // 授权后 1s / 3s / 6s 再试，之后每 5s 直到有频道
             for sec in [1, 3, 6] as [UInt64] {
                 try? await Task.sleep(nanoseconds: sec * 1_000_000_000)
                 guard !Task.isCancelled else { return }
@@ -148,6 +143,18 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
+    /// 网络类型变化（WiFi ↔ 蜂窝）
+    func onConnectionTypeChanged(_ type: NetworkMonitor.ConnectionType) {
+        switch type {
+        case .cellular:
+            showIndicator("当前使用蜂窝网络")
+        case .wifi:
+            break // WiFi 不打扰用户
+        case .wired, .unknown:
+            break
+        }
+    }
+
     func onAppBecameActive() {
         bumpPlayerLayout()
         if channels.isEmpty {
@@ -155,7 +162,6 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
-    /// 无频道时用户点「重新加载」或自动触发
     func retryLoadSources() {
         isBootstrapping = true
         bootstrapMessage = "正在加载频道列表..."
@@ -168,6 +174,8 @@ final class PlayerViewModel: ObservableObject {
         playerLayoutEpoch &+= 1
         NotificationCenter.default.post(name: .tvPlayerNeedsRelayout, object: nil)
     }
+
+    // MARK: - 源管理
 
     func restoreSources() {
         var urls = OrderedDictionary<String, Bool>()
@@ -231,16 +239,16 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
+    // MARK: - 加载频道
+
     func loadChannels(force: Bool = true, silent: Bool = false, preferActiveOnly: Bool = false) {
         if !force && !channels.isEmpty { return }
-        // 引导层用 bootstrapMessage；避免与 Indicator 叠字
         if !silent && !isBootstrapping {
             indicatorText = "加载中..."
         }
         let urls = preferActiveOnly ? [activeSourceUrl] : buildCandidates()
         Task {
             var result = await NetworkService.shared.fetchWithCandidates(urls: urls)
-            // 仅当前源失败时再扩到全部候选
             if result.channels.isEmpty, preferActiveOnly {
                 result = await NetworkService.shared.fetchWithCandidates(urls: buildCandidates())
             }
@@ -254,7 +262,6 @@ final class PlayerViewModel: ObservableObject {
         guard !loaded.isEmpty else {
             if channels.isEmpty {
                 isBootstrapping = true
-                // 中文提示，不叠 Indicator
                 let msg = chineseLoadError(errorMessage)
                 bootstrapMessage = msg + "，正在重试..."
                 indicatorText = ""
@@ -302,7 +309,6 @@ final class PlayerViewModel: ObservableObject {
         return candidates
     }
 
-    /// 把可能的英文/技术错误收成中文，避免加载层出现英文
     private func chineseLoadError(_ raw: String?) -> String {
         guard let raw, !raw.isEmpty else { return "加载失败" }
         let lower = raw.lowercased()
@@ -313,7 +319,6 @@ final class PlayerViewModel: ObservableObject {
         if lower.contains("parse") { return "解析失败" }
         if lower.contains("invalid") || lower.contains("url") { return "地址无效" }
         if lower.contains("server") || lower.contains("http") { return "服务器异常" }
-        // 已是中文则原样（截断过长）
         if raw.range(of: "\\p{Han}", options: .regularExpression) != nil {
             return String(raw.prefix(40))
         }
@@ -336,6 +341,8 @@ final class PlayerViewModel: ObservableObject {
         guard let ch = currentChannel else { return }
         storage.saveLastChannel(key: ch.key, sourceIndex: currentSourceIndex)
     }
+
+    // MARK: - 数据规则
 
     func applyRules(_ input: [Channel]) -> [Channel] {
         input.compactMap { src in
@@ -360,7 +367,6 @@ final class PlayerViewModel: ObservableObject {
             ? channels
             : channels.filter { $0.name.lowercased().contains(q) || $0.group.lowercased().contains(q) }
 
-        // 归一分组名：央视系统一「央视」
         func groupName(for ch: Channel) -> String {
             if M3UParserService.isCCTVKey(ch.key) || ch.name.uppercased().contains("CCTV") {
                 return "央视"
@@ -379,7 +385,6 @@ final class PlayerViewModel: ObservableObject {
             arr.sorted { a, b in
                 let na = M3UParserService.cctvNumber(from: a.key)
                 let nb = M3UParserService.cctvNumber(from: b.key)
-                // 央视按台号：3 → 4 → 5 … 15 → 17
                 if na != Int.max || nb != Int.max {
                     if na != nb { return na < nb }
                 }
@@ -403,7 +408,6 @@ final class PlayerViewModel: ObservableObject {
             }
             map[g]?.append(ch)
         }
-        // 分组顺序：央视靠前，未分组靠后，其余按名
         order.sort { a, b in
             if a == "央视" { return true }
             if b == "央视" { return false }
@@ -419,6 +423,8 @@ final class PlayerViewModel: ObservableObject {
         return result
     }
 
+    // MARK: - 收藏
+
     func toggleFavorite(for ch: Channel) {
         let on = storage.toggleFavorite(ch.key)
         favorites = storage.loadFavorites()
@@ -428,6 +434,8 @@ final class PlayerViewModel: ObservableObject {
     func isFavorite(_ ch: Channel) -> Bool {
         favorites.contains(ch.key)
     }
+
+    // MARK: - 播放控制
 
     var currentChannel: Channel? {
         guard !channels.isEmpty, channels.indices.contains(currentIndex) else { return nil }
@@ -450,7 +458,6 @@ final class PlayerViewModel: ObservableObject {
             autoSwitchState = .idle
         }
         triedLineIndices.insert(currentSourceIndex)
-        // 切换播放时允许后续失败继续试下一条（不要卡在 cooldown）
         if autoSwitchState == .cooldown {
             autoSwitchState = .idle
         }
@@ -464,7 +471,6 @@ final class PlayerViewModel: ObservableObject {
         autoSwitchState = .idle
         scheduleHideFloat()
         if !indicatorText.isEmpty { showIndicator("") }
-        // 首次布局对齐「回前台」
         bumpPlayerLayout()
     }
 
@@ -472,10 +478,21 @@ final class PlayerViewModel: ObservableObject {
     private func onStartupTimeout() { autoSwitchLine(hint: "线路超时，切换下一线路") }
     private func onPlaybackStall() { autoSwitchLine(hint: "网络卡顿，切换下一线路") }
 
-    /// 自动切线：同频道内连续试完所有线路；仅整轮失败后才进入冷却
+    // MARK: - 静音检测
+
+    private func onSilentAudio() {
+        let now = Date()
+        if now.timeIntervalSince(lastSilentSwitchAt) < Double(SILENT_AUDIO_GRACE_NS) / 1e9 {
+            return
+        }
+        guard let ch = currentChannel, ch.sourceCount > 1 else { return }
+        lastSilentSwitchAt = now
+        autoSwitchLine(hint: "当前线路无声音，切换下一线路")
+    }
+
+    /// 自动切线：同频道内连续试完所有线路
     private func autoSwitchLine(hint: String) {
         guard !locked else { return }
-        // switching 中忽略重复回调；cooldown 仅用于整轮试完之后
         if autoSwitchState == .switching { return }
         if autoSwitchState == .cooldown { return }
 
@@ -494,7 +511,6 @@ final class PlayerViewModel: ObservableObject {
             nxt = (nxt + 1) % ch.sourceCount
             scanned += 1
         }
-        // 所有线路都试过
         if triedLineIndices.count >= ch.sourceCount || scanned >= ch.sourceCount {
             autoSwitchState = .idle
             showIndicator("当前频道线路均不可用")
@@ -512,11 +528,9 @@ final class PlayerViewModel: ObservableObject {
         currentSourceIndex = nxt
         triedLineIndices.insert(nxt)
         showIndicator("\(hint) (\(nxt + 1)/\(ch.sourceCount))")
-        // 不在这里 beginCooldown，保证下一条失败还能继续切
         player.play(url: u)
         persistLastChannel()
         showChannelOSD()
-        // 短暂标记后恢复 idle，便于下一次失败继续
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000)
             if autoSwitchState == .switching {
@@ -578,6 +592,8 @@ final class PlayerViewModel: ObservableObject {
     }
 
     func switchNextLine(hint: String) { autoSwitchLine(hint: hint) }
+
+    // MARK: - UI 辅助
 
     func showChannelOSD() {
         guard let ch = currentChannel else { return }

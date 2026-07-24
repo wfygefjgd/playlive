@@ -1,8 +1,10 @@
 import Foundation
 
-class Channel: Codable, Identifiable, Equatable {
-    /// 稳定 id：用 key，避免列表闪烁
+/// 频道数据模型 — 值类型，线程安全，Codable
+struct Channel: Codable, Identifiable, Equatable, Hashable {
+    /// 稳定 id：用 key 避免列表 diff 闪烁
     var id: String { key }
+
     let name: String
     let group: String
     let key: String
@@ -20,24 +22,55 @@ class Channel: Codable, Identifiable, Equatable {
         self.key = (key?.trimmingCharacters(in: .whitespaces)).flatMap { $0.isEmpty ? nil : $0 }
             ?? M3UParserService.normalizeName(trimmedName)
         self.urls = []
-        if let urls = urls {
+        if let urls {
             for u in urls {
                 addUrl(u)
             }
         }
     }
 
-    func addUrl(_ url: String) {
+    /// 添加 URL（去重 + 清理）
+    mutating func addUrl(_ url: String) {
         let clean = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty, !urls.contains(clean) else { return }
         urls.append(clean)
+    }
+
+    /// 批量添加 URL
+    mutating func addUrls(_ newUrls: [String]) {
+        for u in newUrls {
+            addUrl(u)
+        }
+    }
+
+    /// 删除指定 URL
+    mutating func removeUrl(_ url: String) {
+        let clean = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        urls.removeAll { $0 == clean }
     }
 
     var sourceCount: Int { urls.count }
 
     var primaryUrl: String { urls.first ?? "" }
 
+    var isEmpty: Bool { urls.isEmpty }
+
+    // MARK: - Hashable
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(key)
+    }
+
+    // MARK: - Equatable
+
     static func == (lhs: Channel, rhs: Channel) -> Bool {
         lhs.key == rhs.key
+    }
+
+    /// 合并两个同名频道的 URL
+    mutating func merge(with other: Channel) {
+        for url in other.urls {
+            addUrl(url)
+        }
     }
 }

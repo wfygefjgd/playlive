@@ -1,37 +1,46 @@
 import AVKit
 import Combine
 
-/// 起播给足时间；只有真正长时间无画面/卡死才回调切换
+/// 起播/卡顿检测/静音检测引擎 — 结构化并发优化版
+@MainActor
 final class PlayerEngine: ObservableObject {
-    /// 起播超时（再放慢约 0.5s，避免刚出画就切）
-    static let startupTimeoutNs: UInt64 = 11_500_000_000
-    /// 播放中连续卡顿才切
-    static let stallTimeoutNs: UInt64 = 6_500_000_000
-    /// ready 后保护期
-    static let readyProtectNs: UInt64 = 2_500_000_000
-    /// error 至少等这么久再报失败
-    static let errorGraceNs: UInt64 = 3_500_000_000
+    // MARK: - 配置常量
+    static let startupTimeoutNs: UInt64 = 4_000_000_000      // 4s 起播超时
+    static let stallTimeoutNs: UInt64 = 2_000_000_000         // 2s 卡顿切换
+    static let readyProtectNs: UInt64 = 1_500_000_000         // 1.5s 出画保护
+    static let errorGraceNs: UInt64 = 1_500_000_000           // 1.5s 错误宽容
+    static let silentAudioCheckNs: UInt64 = 3_000_000_000     // 3s 后检测静音
+    static let silentAudioPollIntervalNs: UInt64 = 500_000_000 // 500ms 轮询间隔
 
     let player = AVPlayer()
     private var cancellables = Set<AnyCancellable>()
     private var statusObserver: NSKeyValueObservation?
+    private var timeObserver: Any?
+
+    // 统一 Task 管理
+    private var watchTasks: [String: Task<Void, Never>] = [:]
     private var playToken = 0
-    private var startupTask: Task<Void, Never>?
-    private var stallTask: Task<Void, Never>?
-    private var protectTask: Task<Void, Never>?
-    private var errorGraceTask: Task<Void, Never>?
+
+    // 播放状态
     private var stallWatchEnabled = false
     private var continuousStall = false
-    private var playStartedAt: Date?
     private var hasRendered = false
+    private var lastItemTime: CMTime = .zero
+    private var lastTimeProgressAt: Date = .distantPast
+
+    // 静音检测
+    private var hasAudioTrackReported = false
+    private var silenceCheckScheduled = false
 
     @Published var isReady = false
     @Published var isPlaying = false
 
+    // 回调
     var onError: (() -> Void)?
     var onReady: (() -> Void)?
     var onStartupTimeout: (() -> Void)?
     var onPlaybackStall: (() -> Void)?
+    var onSilentAudio: (() -> Void)?
 
     init() {
         player.actionAtItemEnd = .none
@@ -39,45 +48,38 @@ final class PlayerEngine: ObservableObject {
         observeTimeControl()
     }
 
+    // MARK: - Public API
+
     func play(url: URL) {
         pause()
         playToken += 1
         let token = playToken
-        cancelAllWatchers()
         statusObserver?.invalidate()
-        stallWatchEnabled = false
-        continuousStall = false
-        hasRendered = false
-        playStartedAt = Date()
+        statusObserver = nil
+
+        resetState(for: token)
 
         let asset = AVURLAsset(url: url, options: [
-            AVURLAssetPreferPreciseDurationAndTimingKey: false
+            AVURLAssetPreferPreciseDurationAndTimingKey: false,
+            "AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": "Mozilla/5.0 (iPhone; CPU iOS 17_0 like Mac OS X)"]
         ])
         let item = AVPlayerItem(asset: asset)
-        // 给直播多一点缓冲，减少刚出画就卡死
-        item.preferredForwardBufferDuration = 6
+        item.preferredForwardBufferDuration = 2
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
-        player.automaticallyWaitsToMinimizeStalling = true
+        player.automaticallyWaitsToMinimizeStalling = false
         player.replaceCurrentItem(with: item)
         isReady = false
         isPlaying = true
 
-        statusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
-            guard let self else { return }
-            if item.status == .readyToPlay {
-                DispatchQueue.main.async {
-                    guard self.playToken == token else { return }
-                    self.handleReady(token: token)
-                }
-            } else if item.status == .failed {
-                DispatchQueue.main.async {
-                    guard self.playToken == token else { return }
-                    self.scheduleErrorAfterGrace(token: token)
-                }
-            }
+        setupItemObserver(item, token: token)
+        setupTimeObserver(token: token)
+
+        scheduleTask(named: "startup", token: token, timeout: Self.startupTimeoutNs) { [weak self] in
+            guard let self, !self.isReady, !self.hasRendered else { return }
+            self.cancelAllTasks()
+            self.onStartupTimeout?()
         }
 
-        scheduleStartupTimeout(token: token)
         player.play()
     }
 
@@ -96,13 +98,21 @@ final class PlayerEngine: ObservableObject {
         playToken += 1
         statusObserver?.invalidate()
         statusObserver = nil
-        cancelAllWatchers()
+        if let obs = timeObserver {
+            player.removeTimeObserver(obs)
+            timeObserver = nil
+        }
+        cancelAllTasks()
         player.replaceCurrentItem(with: nil)
         isPlaying = false
         isReady = false
         stallWatchEnabled = false
         continuousStall = false
         hasRendered = false
+        hasAudioTrackReported = false
+        silenceCheckScheduled = false
+        lastItemTime = .zero
+        lastTimeProgressAt = .distantPast
     }
 
     var volume: Float {
@@ -110,140 +120,243 @@ final class PlayerEngine: ObservableObject {
         set { player.volume = max(0, min(1, newValue)) }
     }
 
-    // MARK: - Ready / startup
+    /// 当前播放地址是否有可用的声音轨
+    var hasActiveAudioTrack: Bool {
+        guard let item = player.currentItem else { return false }
+        let tracks = item.tracks.filter { $0.assetTrack?.mediaType == .audio }
+        return tracks.contains { $0.isEnabled }
+    }
 
-    private func handleReady(token: Int) {
-        guard playToken == token else { return }
-        cancelStartup()
-        errorGraceTask?.cancel()
-        errorGraceTask = nil
-        isReady = true
-        hasRendered = true
-        player.play()
-        isPlaying = true
-        onReady?()
-        // 刚出画面：长时间保护，避免「画面刚出来就切走」
+    // MARK: - Private — State Management
+
+    private func resetState(for token: Int) {
+        cancelAllTasks()
         stallWatchEnabled = false
-        protectTask?.cancel()
-        protectTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: Self.readyProtectNs)
-            guard !Task.isCancelled else { return }
+        continuousStall = false
+        hasRendered = false
+        hasAudioTrackReported = false
+        silenceCheckScheduled = false
+        lastItemTime = .zero
+        lastTimeProgressAt = .distantPast
+    }
+
+    private func cancelAllTasks() {
+        for (_, task) in watchTasks {
+            task.cancel()
+        }
+        watchTasks.removeAll()
+    }
+
+    @discardableResult
+    private func scheduleTask(named name: String, token: Int, timeout: UInt64, action: @escaping @MainActor () -> Void) -> Task<Void, Never> {
+        // 同名任务取消
+        if let existing = watchTasks[name] {
+            existing.cancel()
+        }
+        let task = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: timeout)
+                guard !Task.isCancelled else { return }
+                guard let self else { return }
+                guard self.playToken == token else { return }
+                action()
+            } catch {
+                // Cancelled
+            }
+            self?.watchTasks[name] = nil
+        }
+        watchTasks[name] = task
+        return task
+    }
+
+    // MARK: - Private — Observers
+
+    private func setupItemObserver(_ item: AVPlayerItem, token: Int) {
+        statusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             guard let self else { return }
-            await MainActor.run { [weak self] in
-                guard let self, self.playToken == token else { return }
-                self.stallWatchEnabled = true
+            if item.status == .readyToPlay {
+                Task { @MainActor [weak self] in
+                    guard let self, self.playToken == token else { return }
+                    self.handleReady(token: token)
+                }
+            } else if item.status == .failed {
+                Task { @MainActor [weak self] in
+                    guard let self, self.playToken == token else { return }
+                    self.handleItemFailed(token: token)
+                }
             }
         }
     }
 
-    private func scheduleErrorAfterGrace(token: Int) {
-        errorGraceTask?.cancel()
-        let elapsed = playStartedAt.map { Date().timeIntervalSince($0) } ?? 0
-        let remain = max(0, Double(Self.errorGraceNs) / 1e9 - elapsed)
-        errorGraceTask = Task { [weak self] in
-            if remain > 0 {
-                try? await Task.sleep(nanoseconds: UInt64(remain * 1_000_000_000))
-            }
-            guard !Task.isCancelled else { return }
-            guard let self else { return }
-            await MainActor.run { [weak self] in
-                guard let self, self.playToken == token else { return }
-                if self.hasRendered || self.isReady { return }
-                self.cancelAllWatchers()
-                self.onError?()
+    private func setupTimeObserver(token: Int) {
+        let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard self.playToken == token else { return }
+
+                // 检测进度是否推进
+                if time != self.lastItemTime {
+                    if self.lastTimeProgressAt == .distantPast {
+                        self.lastTimeProgressAt = Date()
+                    } else if time > self.lastItemTime {
+                        self.lastTimeProgressAt = Date()
+                    }
+                    self.lastItemTime = time
+                }
+
+                if !self.hasRendered && time > .zero {
+                    self.hasRendered = true
+                }
             }
         }
     }
-
-    private func scheduleStartupTimeout(token: Int) {
-        cancelStartup()
-        startupTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: Self.startupTimeoutNs)
-            guard !Task.isCancelled else { return }
-            guard let self else { return }
-            await MainActor.run { [weak self] in
-                guard let self, self.playToken == token else { return }
-                if self.isReady || self.hasRendered { return }
-                self.cancelAllWatchers()
-                self.onStartupTimeout?()
-            }
-        }
-    }
-
-    // MARK: - Stall
 
     private func observeTimeControl() {
         player.publisher(for: \.timeControlStatus)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] status in
-                guard let self else { return }
-                self.isPlaying = status == .playing
-                self.handleTimeControl(status)
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.isPlaying = status == .playing
+                    self.handleTimeControl(status)
+                }
             }
             .store(in: &cancellables)
+    }
+
+    // MARK: - Private — Event Handlers
+
+    private func handleReady(token: Int) {
+        guard playToken == token else { return }
+        cancelTask(named: "startup")
+        cancelTask(named: "errorGrace")
+        isReady = true
+        hasRendered = true
+        player.play()
+        isPlaying = true
+        onReady?()
+
+        // 保护期内不检测卡顿
+        stallWatchEnabled = false
+        scheduleTask(named: "readyProtect", token: token, timeout: Self.readyProtectNs) { [weak self] in
+            guard let self, self.playToken == token else { return }
+            self.stallWatchEnabled = true
+        }
+
+        // 延迟后检测静音
+        scheduleSilentAudioCheck(token: token)
+    }
+
+    private func handleItemFailed(token: Int) {
+        guard playToken == token else { return }
+        let elapsed = lastTimeProgressAt == .distantPast ? 0 : Date().timeIntervalSince(lastTimeProgressAt)
+        let graceRemain = max(0, Double(Self.errorGraceNs) / 1e9 - elapsed)
+
+        scheduleTask(named: "errorGrace", token: token, timeout: UInt64(graceRemain * 1_000_000_000)) { [weak self] in
+            guard let self, self.playToken == token else { return }
+            if self.hasRendered || self.isReady { return }
+            self.cancelAllTasks()
+            self.onError?()
+        }
     }
 
     private func handleTimeControl(_ status: AVPlayer.TimeControlStatus) {
         guard stallWatchEnabled, isReady else {
             if status == .playing {
-                stopStallTimer()
+                cancelTask(named: "stall")
+                continuousStall = false
             }
             return
         }
         switch status {
         case .waitingToPlayAtSpecifiedRate:
-            beginStallTimerIfNeeded()
+            beginStallCheck()
         case .playing:
-            stopStallTimer()
+            cancelTask(named: "stall")
+            continuousStall = false
         case .paused:
-            // 用户暂停不算卡顿
-            stopStallTimer()
+            cancelTask(named: "stall")
+            continuousStall = false
         @unknown default:
             break
         }
     }
 
-    private func beginStallTimerIfNeeded() {
+    private func beginStallCheck() {
         guard !continuousStall else { return }
         continuousStall = true
         let token = playToken
-        stallTask?.cancel()
-        stallTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: Self.stallTimeoutNs)
-            guard !Task.isCancelled else { return }
-            guard let self else { return }
-            await MainActor.run { [weak self] in
-                guard let self, self.playToken == token, self.stallWatchEnabled else { return }
-                let waiting = self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-                let rateZero = self.player.rate == 0
-                guard waiting, rateZero else {
-                    self.continuousStall = false
-                    return
-                }
+        scheduleTask(named: "stall", token: token, timeout: Self.stallTimeoutNs) { [weak self] in
+            guard let self, self.playToken == token, self.stallWatchEnabled else { return }
+            let waiting = self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            let rateZero = self.player.rate == 0
+            guard waiting, rateZero else {
                 self.continuousStall = false
-                self.stallTask = nil
-                self.onPlaybackStall?()
+                return
+            }
+            self.continuousStall = false
+            self.onPlaybackStall?()
+        }
+    }
+
+    // MARK: - Private — Silent Audio Detection
+
+    private func scheduleSilentAudioCheck(token: Int) {
+        guard !silenceCheckScheduled else { return }
+        silenceCheckScheduled = true
+
+        scheduleTask(named: "silentCheck", token: token, timeout: Self.silentAudioCheckNs) { [weak self] in
+            guard let self, self.playToken == token, self.isReady else { return }
+            self.pollAudioTrack(token: token)
+        }
+    }
+
+    private func pollAudioTrack(token: Int) {
+        guard playToken == token, isReady, !hasAudioTrackReported else { return }
+
+        if !hasAudioTrackPresent() {
+            hasAudioTrackReported = true
+            onSilentAudio?()
+            return
+        }
+
+        // 再轮询一次确认
+        scheduleTask(named: "silentRecheck", token: token, timeout: Self.silentAudioPollIntervalNs) { [weak self] in
+            guard let self, self.playToken == token, self.isReady else { return }
+            if !self.hasAudioTrackPresent() {
+                self.hasAudioTrackReported = true
+                self.onSilentAudio?()
             }
         }
     }
 
-    private func stopStallTimer() {
-        continuousStall = false
-        stallTask?.cancel()
-        stallTask = nil
+    private func hasAudioTrackPresent() -> Bool {
+        guard let item = player.currentItem else { return false }
+        let audioTracks = item.tracks.filter { $0.assetTrack?.mediaType == .audio }
+        return !audioTracks.isEmpty
     }
 
-    private func cancelStartup() {
-        startupTask?.cancel()
-        startupTask = nil
+    // MARK: - Private — Task Helpers
+
+    private func cancelTask(named name: String) {
+        watchTasks[name]?.cancel()
+        watchTasks[name] = nil
     }
 
-    private func cancelAllWatchers() {
-        cancelStartup()
-        stopStallTimer()
-        protectTask?.cancel()
-        protectTask = nil
-        errorGraceTask?.cancel()
-        errorGraceTask = nil
+    /// 主动检测卡顿（供外部轮询，线程安全）
+    func isStalled() -> Bool {
+        guard player.currentItem != nil else { return true }
+        if player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
+            return true
+        }
+        // 使用局部变量避免多线程访问冲突
+        let progressAt = lastTimeProgressAt
+        let rendered = hasRendered
+        if rendered && progressAt != .distantPast,
+           Date().timeIntervalSince(progressAt) > 3.5 {
+            return true
+        }
+        return false
     }
 }

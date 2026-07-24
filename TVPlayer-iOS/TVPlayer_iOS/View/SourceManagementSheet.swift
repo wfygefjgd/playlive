@@ -4,78 +4,187 @@ struct SourceManagementSheet: View {
     @EnvironmentObject private var vm: PlayerViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var inputUrl = ""
+    @State private var showInvalidAlert = false
 
     var body: some View {
         NavigationView {
             VStack(spacing: 12) {
-                HStack(spacing: 8) {
-                    TextField("输入 m3u / m3u8 地址", text: $inputUrl)
-                        .textFieldStyle(.roundedBorder)
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
-                    Button("添加") { add() }
-                        .buttonStyle(.borderedProminent)
+                // 输入区域
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        TextField("输入 m3u / m3u8 地址", text: $inputUrl)
+                            .textFieldStyle(.roundedBorder)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                            .keyboardType(.URL)
+                            .submitLabel(.done)
+                            .onSubmit { add() }
+
+                        Button("添加") { add() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(inputUrl.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+
+                    // 快捷粘贴按钮
+                    if inputUrl.isEmpty {
+                        Button {
+                            if let pasted = UIPasteboard.general.string,
+                               !pasted.isEmpty {
+                                inputUrl = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+                            }
+                        } label: {
+                            HStack {
+                                Image(systemName: "doc.on.clipboard")
+                                Text("粘贴剪贴板内容")
+                            }
+                            .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
                 }
 
+                // 源列表
                 List {
-                    ForEach(Array(vm.sourceUrls.enumerated()), id: \.offset) { (i, url) in
+                    Section {
+                        ForEach(Array(vm.sourceUrls.enumerated()), id: \.offset) { (i, url) in
+                            sourceRow(index: i, url: url)
+                        }
+                        .onDelete { offsets in
+                            deleteSources(at: offsets)
+                        }
+                    } header: {
                         HStack {
-                            Button {
-                                vm.selectSource(url)
-                                dismiss()
-                            } label: {
-                                HStack {
-                                    Text(url == vm.activeSourceUrl ? "●" : "○")
-                                        .foregroundColor(url == vm.activeSourceUrl ? .blue : .gray)
-                                        .font(.title3)
-                                    Text(label(for: url))
-                                        .lineLimit(1)
-                                        .font(.body)
-                                        .foregroundColor(.primary)
-                                    Spacer()
-                                }
-                            }
-                        }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            if url != DEFAULT_SOURCE_URL {
-                                Button("删除", role: .destructive) {
-                                    vm.deleteSourceUrl(url)
-                                }
-                            }
-                        }
-                    }
-                    .onDelete { offsets in
-                        for i in offsets {
-                            let url = vm.sourceUrls[i]
-                            if url != DEFAULT_SOURCE_URL {
-                                vm.deleteSourceUrl(url)
-                            }
+                            Text("当前源: \(activeSourceLabel)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Spacer()
                         }
                     }
                 }
-                .listStyle(.plain)
+                .listStyle(.insetGrouped)
             }
-            .padding()
+            .padding(.vertical)
             .navigationTitle("管理直播源")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("重置") {
+                        resetToDefault()
+                    }
+                    .foregroundColor(.red)
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("关闭") { dismiss() }
                 }
             }
         }
+        .alert("地址无效", isPresented: $showInvalidAlert) {
+            Button("确定", role: .cancel) { }
+        } message: {
+            Text("请输入以 http:// 或 https:// 开头的有效地址")
+        }
     }
 
-    private func label(for url: String) -> String {
-        if url == DEFAULT_SOURCE_URL { return "默认源" }
+    private var activeSourceLabel: String {
+        for p in PRESET_SOURCES where p.url == vm.activeSourceUrl {
+            return p.name
+        }
+        return "自定义"
+    }
+
+    @ViewBuilder
+    private func sourceRow(index: Int, url: String) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                vm.selectSource(url)
+                dismiss()
+            } label: {
+                HStack {
+                    // 选中标记
+                    Image(systemName: url == vm.activeSourceUrl ? "largecircle.fill.circle" : "circle")
+                        .foregroundColor(url == vm.activeSourceUrl ? .blue : .gray)
+                        .font(.body)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        // 预置源显示名称，自定义源显示 URL
+                        Text(displayName(for: url))
+                            .font(.body)
+                            .foregroundColor(.primary)
+
+                        if displayName(for: url) != url {
+                            Text(url)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    Spacer()
+
+                    // 预置源标签
+                    if isBuiltin(url) {
+                        Text("预置")
+                            .font(.caption2)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.blue.opacity(0.15))
+                            .foregroundColor(.blue)
+                            .cornerRadius(4)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if url != DEFAULT_SOURCE_URL {
+                Button("删除", role: .destructive) {
+                    vm.deleteSourceUrl(url)
+                }
+            }
+        }
+    }
+
+    private func displayName(for url: String) -> String {
+        for p in PRESET_SOURCES where p.url == url {
+            return p.name
+        }
         return url
     }
 
+    private func isBuiltin(_ url: String) -> Bool {
+        PRESET_SOURCES.contains { $0.url == url }
+    }
+
     private func add() {
-        let url = inputUrl.trimmingCharacters(in: .whitespaces)
+        let url = inputUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !url.isEmpty else { return }
+
+        // URL 格式校验
+        guard url.hasPrefix("http://") || url.hasPrefix("https://"),
+              URL(string: url) != nil else {
+            showInvalidAlert = true
+            return
+        }
+
         vm.selectSource(url)
-        inputUrl = ""
+        dismiss()
+    }
+
+    private func deleteSources(at offsets: IndexSet) {
+        // 从后往前删，避免索引偏移
+        for i in offsets.sorted(by: >) {
+            guard i < vm.sourceUrls.count else { continue }
+            let url = vm.sourceUrls[i]
+            if url != DEFAULT_SOURCE_URL {
+                vm.deleteSourceUrl(url)
+            }
+        }
+    }
+
+    private func resetToDefault() {
+        vm.selectSource(DEFAULT_SOURCE_URL)
         dismiss()
     }
 }

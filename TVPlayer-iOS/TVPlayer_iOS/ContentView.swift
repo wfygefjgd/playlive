@@ -4,9 +4,12 @@ import AVKit
 struct ContentView: View {
     @EnvironmentObject private var vm: PlayerViewModel
 
+    // 数字键选台
+    @State private var numberInput = ""
+    @State private var numberInputTask: Task<Void, Never>?
+
     var body: some View {
         ZStack {
-            // MUST be clear — video is on UIWindow behind SwiftUI
             Color.clear
 
             VideoPlayerView()
@@ -18,6 +21,7 @@ struct ContentView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { vm.showFloat() }
                     .simultaneousGesture(playerDragGesture())
+                    .simultaneousGesture(doubleTapGesture())
             }
 
             if vm.panelVisible && !vm.locked {
@@ -72,7 +76,23 @@ struct ContentView: View {
                     .zIndex(5)
             }
 
-            // Controls stay ABOVE home indicator with extra bottom padding
+            // 数字键选台输入显示
+            if !numberInput.isEmpty {
+                VStack {
+                    Text(numberInput)
+                        .font(.system(size: 60, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .background(Color.black.opacity(0.7))
+                        .cornerRadius(16)
+                    Text("按数字键选台")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+                }
+                .zIndex(70)
+            }
+
             if vm.showFloatOverlay || vm.locked {
                 floatingButtons
                     .padding(.top, 12)
@@ -87,12 +107,11 @@ struct ContentView: View {
         .defersSystemGestures(on: .all)
         .onAppear {
             vm.startup()
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: .tvPlayerNeedsRelayout, object: nil)
-            }
+            NotificationCenter.default.post(name: .tvPlayerNeedsRelayout, object: nil)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             vm.pause()
+            cancelNumberInput()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             vm.resume()
@@ -102,6 +121,9 @@ struct ContentView: View {
         .sheet(isPresented: $vm.showSourceSheet) {
             SourceManagementSheet()
                 .environmentObject(vm)
+        }
+        .onKeyPress { keyPress in
+            handleKeyPress(keyPress)
         }
     }
 
@@ -128,9 +150,8 @@ struct ContentView: View {
                 guard !vm.locked, !vm.panelVisible else { return }
                 let w = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height, 1)
                 let sx = value.startLocation.x
-                let dx = value.translation.width
                 let dy = value.translation.height
-                guard abs(dy) > abs(dx), sx > w * 0.65 else { return }
+                guard abs(dy) > abs(value.translation.width), sx > w * 0.65 else { return }
                 vm.handleVolumeDrag(translationHeight: dy, ended: false)
             }
             .onEnded { value in
@@ -152,5 +173,112 @@ struct ContentView: View {
                     else { vm.prevChannel() }
                 }
             }
+    }
+
+    private func doubleTapGesture() -> some Gesture {
+        TapGesture(count: 2)
+            .onEnded {
+                guard !vm.locked else { return }
+                vm.togglePanel()
+            }
+    }
+
+    // MARK: - 数字键选台
+
+    private func handleKeyPress(_ press: KeyPress) -> KeyPress.Result {
+        guard !vm.panelVisible else { return .ignored }
+
+        // 数字键 0-9
+        if let digit = press.characters.first(where: { $0.isNumber }) {
+            appendNumber(digit)
+            return .handled
+        }
+
+        // 回车键确认选台
+        if press.key == .return {
+            confirmNumberInput()
+            return .handled
+        }
+
+        // ESC / Backspace 取消输入
+        if press.key == .escape {
+            cancelNumberInput()
+            return .handled
+        }
+        if press.key == .delete || press.key == .backspace {
+            if !numberInput.isEmpty {
+                numberInput.removeLast()
+                if numberInput.isEmpty {
+                    cancelNumberInput()
+                }
+                return .handled
+            }
+        }
+
+        // 上下方向键切台
+        if press.key == .upArrow {
+            vm.prevChannel()
+            return .handled
+        }
+        if press.key == .downArrow {
+            vm.nextChannel()
+            return .handled
+        }
+
+        // 左右方向键切线
+        if press.key == .leftArrow {
+            vm.switchSource(direction: -1)
+            return .handled
+        }
+        if press.key == .rightArrow {
+            vm.switchSource(direction: 1)
+            return .handled
+        }
+
+        // 空格暂停/播放
+        if press.characters == " " {
+            if vm.player.isPlaying {
+                vm.player.pause()
+            } else {
+                vm.player.resume()
+            }
+            return .handled
+        }
+
+        return .ignored
+    }
+
+    private func appendNumber(_ digit: Character) {
+        numberInput.append(digit)
+        numberInputTask?.cancel()
+        numberInputTask = Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { confirmNumberInput() }
+        }
+        // 超过 4 位自动确认
+        if numberInput.count >= 4 {
+            confirmNumberInput()
+        }
+    }
+
+    private func confirmNumberInput() {
+        guard let num = Int(numberInput), num > 0 else {
+            cancelNumberInput()
+            return
+        }
+        let index = num - 1
+        if index < vm.channels.count {
+            vm.selectChannel(vm.channels[index])
+        } else if !vm.channels.isEmpty {
+            vm.selectChannel(vm.channels[vm.channels.count - 1])
+        }
+        cancelNumberInput()
+    }
+
+    private func cancelNumberInput() {
+        numberInput = ""
+        numberInputTask?.cancel()
+        numberInputTask = nil
     }
 }

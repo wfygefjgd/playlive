@@ -1,14 +1,57 @@
-*.xcworkspace
+# Xcode
+#
+# gitignore contributors: remember to update Global/Xcode.gitignore, https://github.com/github/gitignore/blob/main/Global/Xcode.gitignore
+
+## User settings
+xcuserdata/
+
+## compatibility with Xcode 8 and earlier (ignoring not required starting Xcode 9)
+*.xcscmblueprint
+*.xccheckout
+
+## compatibility with Xcode 3 and earlier (ignoring not required starting Xcode 4)
+build/
+DerivedData/
+*.moved-aside
 *.pbxuser
 *.mode1v3
 *.mode2v3
 *.perspectivev3
-*.xcuserdata
-*.xcbkptlist
+*.xcuserstate
+
+## Obj-C/Swift
 *.hmap
+
+## Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# Swift Package Manager
+.build/
+
+# CocoaPods
+Pods/
+
+# Carthage
+Carthage/Build/
+
+# Accio dependency management
+Dependencies/
+.accio/
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# Code Injection
+iOSInjectionProject/
+
+# macOS
+.DS_Store
+
+# GitHub Actions
 *.ipa
 *.dSYM.zip
-*.dSYM
-DerivedData/
-Build/
-.DS_Store
+*.xcarchive

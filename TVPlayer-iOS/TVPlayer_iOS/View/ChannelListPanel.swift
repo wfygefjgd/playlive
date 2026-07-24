@@ -3,18 +3,42 @@ import SwiftUI
 struct ChannelListPanel: View {
     @EnvironmentObject private var vm: PlayerViewModel
     @State private var searchText = ""
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
-            TextField("搜索频道", text: $searchText)
-                .textFieldStyle(.plain)
-                .foregroundColor(.white)
-                .padding(8)
-                .background(Color(white: 0.16))
-                .cornerRadius(6)
-                .padding(.horizontal, 8)
-                .padding(.top, 8)
+            // 搜索框
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.gray)
+                    .font(.caption)
 
+                TextField("搜索频道", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .foregroundColor(.white)
+                    .focused($searchFocused)
+                    .submitLabel(.search)
+                    .onSubmit {
+                        // 提交搜索后可以收起键盘
+                        searchFocused = false
+                    }
+
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.gray)
+                    }
+                }
+            }
+            .padding(8)
+            .background(Color(white: 0.16))
+            .cornerRadius(6)
+            .padding(.horizontal, 8)
+            .padding(.top, 8)
+
+            // 频道列表
             ScrollViewReader { proxy in
                 List {
                     ForEach(vm.sections(search: searchText)) { section in
@@ -46,6 +70,7 @@ struct ChannelListPanel: View {
                 }
             }
 
+            // 底部状态栏
             Text(vm.indicatorText.isEmpty
                  ? "已加载 \(vm.channels.count) 个频道"
                  : vm.indicatorText)

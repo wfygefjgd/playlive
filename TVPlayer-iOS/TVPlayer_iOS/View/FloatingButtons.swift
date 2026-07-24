@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// 悬浮控制按钮 — 带触觉反馈
 struct FloatingButtons: View {
     let panelVisible: Bool
     let locked: Bool
@@ -10,48 +11,78 @@ struct FloatingButtons: View {
 
     var body: some View {
         ZStack {
-            // Top-left: toggle panel
+            // 左上角：切换面板
             VStack {
                 HStack {
-                    Button(action: onTogglePanel) {
-                        Text(panelVisible ? "◀" : "▶")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .frame(width: 44, height: 44)
-                            .background(Color.black.opacity(0.35))
-                            .cornerRadius(8)
-                    }
-                    .simultaneousGesture(
-                        LongPressGesture(minimumDuration: 0.5)
-                            .onEnded { _ in onLongPanel() }
+                    circleButton(
+                        icon: panelVisible ? "◀" : "▶",
+                        action: {
+                            onTogglePanel()
+                            haptic(.light)
+                        },
+                        onLongPress: onLongPanel
                     )
                     .opacity(locked ? 0 : 1)
+                    .animation(.easeInOut(duration: 0.15), value: locked)
                     Spacer()
                 }
                 Spacer()
             }
-            .padding(8)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 16)
 
-            // Bottom-left: lock
+            // 左下角：锁定
             VStack {
                 Spacer()
                 HStack {
-                    Button(action: onToggleLock) {
-                        Text(locked ? "🔒" : "🔓")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .frame(width: 44, height: 44)
-                            .background(Color.black.opacity(0.35))
-                            .cornerRadius(8)
-                    }
-                    .simultaneousGesture(
-                        LongPressGesture(minimumDuration: 0.5)
-                            .onEnded { _ in onLongLock() }
+                    circleButton(
+                        icon: locked ? "🔒" : "🔓",
+                        action: {
+                            onToggleLock()
+                            haptic(.medium)
+                        },
+                        onLongLock: onLongLock
                     )
                     Spacer()
                 }
             }
-            .padding(8)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 16)
         }
+    }
+
+    @ViewBuilder
+    private func circleButton(
+        icon: String,
+        action: @escaping () -> Void,
+        onLongPress: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(icon)
+                .font(.system(size: 18, weight: .medium))
+                .foregroundColor(.white)
+                .frame(width: 44, height: 44)
+                .background(
+                    Circle()
+                        .fill(Color.black.opacity(0.4))
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        )
+                )
+        }
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.5)
+                .onEnded { _ in
+                    haptic(.heavy)
+                    onLongPress()
+                }
+        )
+        .buttonStyle(PlainButtonStyle())
+    }
+
+    private func haptic(_ style: UIImpactFeedbackGenerator.FeedbackStyle) {
+        let generator = UIImpactFeedbackGenerator(style: style)
+        generator.impactOccurred()
     }
 }

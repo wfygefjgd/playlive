@@ -1,6 +1,7 @@
 import SwiftUI
 import AVKit
 import UIKit
+import MediaPlayer
 import Combine
 
 // MARK: - Window full-bleed (cold start same as resume)
@@ -26,6 +27,11 @@ final class WindowVideoSurface {
         playerLayer.backgroundColor = UIColor.black.cgColor
         host.layer.addSublayer(playerLayer)
 
+        setupNotifications()
+        setupAudioSession()
+    }
+
+    private func setupNotifications() {
         let notes: [Notification.Name] = [
             UIApplication.didBecomeActiveNotification,
             UIApplication.willEnterForegroundNotification,
@@ -42,7 +48,62 @@ final class WindowVideoSurface {
                 }
                 .store(in: &cancellables)
         }
+
+        // 音频路由变更（耳机拔插等）
+        NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.handleRouteChange()
+            }
+            .store(in: &cancellables)
+
+        // 音频中断通知（来电等）
+        NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] note in
+                self?.handleInterruption(note)
+            }
+            .store(in: &cancellables)
     }
+
+    // MARK: - Audio Session
+
+    private func setupAudioSession() {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .moviePlayback, options: [.allowAirPlay, .defaultToSpeaker])
+            try session.setActive(true)
+        } catch {
+            print("Audio session setup failed: \(error)")
+        }
+    }
+
+    private func handleRouteChange() {
+        install(reason: "routeChange")
+    }
+
+    private func handleInterruption(_ note: Notification) {
+        guard let info = note.userInfo,
+              let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+        switch type {
+        case .began:
+            // 中断开始（来电等），暂停播放由 PlayerEngine 处理
+            break
+        case .ended:
+            // 中断结束，恢复播放
+            if let raw = info[AVAudioSessionInterruptionOptionKey] as? UInt {
+                let options = AVAudioSession.InterruptionOptions(rawValue: raw)
+                if options.contains(.shouldResume) {
+                    install(reason: "interruptionEnded")
+                }
+            }
+        @unknown default:
+            break
+        }
+    }
+
+    // MARK: - Player
 
     func setPlayer(_ player: AVPlayer?) {
         boundPlayer = player
@@ -56,7 +117,6 @@ final class WindowVideoSurface {
     func install(reason: String = "") {
         guard let window = Self.keyWindow() else { return }
 
-        // SwiftUI must not paint opaque black over window video
         window.backgroundColor = .black
         if let root = window.rootViewController?.view {
             root.backgroundColor = .clear
@@ -71,7 +131,6 @@ final class WindowVideoSurface {
             window.sendSubviewToBack(host)
         }
 
-        // Frame-based full window (same as after resume) — ignore safeArea
         let full = window.bounds
         host.frame = full
         host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -82,7 +141,6 @@ final class WindowVideoSurface {
         if playerLayer.frame.width < 2 || playerLayer.frame.height < 2 {
             playerLayer.frame = full
         }
-        // Never smaller than window
         if playerLayer.frame.width < full.width - 0.5
             || playerLayer.frame.height < full.height - 0.5 {
             host.frame = full
@@ -112,7 +170,6 @@ final class WindowVideoSurface {
     fileprivate func onDisplayLinkTick() {
         displayLinkTicks += 1
         install(reason: "displayLink")
-        // ~2 seconds at 60fps
         if displayLinkTicks >= 120 {
             displayLink?.invalidate()
             displayLink = nil
@@ -219,7 +276,6 @@ final class RootHostingController<Content: View>: UIHostingController<Content> {
 
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
-        // Home Indicator inset changed (cold start vs after hide) — relayout like resume
         WindowVideoSurface.shared.install(reason: "safeArea")
         NotificationCenter.default.post(name: .tvPlayerNeedsRelayout, object: nil)
     }
@@ -227,6 +283,29 @@ final class RootHostingController<Content: View>: UIHostingController<Content> {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         WindowVideoSurface.shared.install(reason: "host-layout")
+    }
+}
+
+// MARK: - Now Playing Info (锁屏控件)
+
+final class NowPlayingController {
+    static let shared = NowPlayingController()
+    private let infoCenter = MPNowPlayingInfoCenter.default()
+
+    func updateElapsedTime(_ time: TimeInterval) {
+        var info = infoCenter.nowPlayingInfo ?? [:]
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = time
+        infoCenter.nowPlayingInfo = info
+    }
+
+    func updatePlaybackRate(_ rate: Float) {
+        var info = infoCenter.nowPlayingInfo ?? [:]
+        info[MPNowPlayingInfoPropertyPlaybackRate] = rate
+        infoCenter.nowPlayingInfo = info
+    }
+
+    func clear() {
+        infoCenter.nowPlayingInfo = nil
     }
 }
 
