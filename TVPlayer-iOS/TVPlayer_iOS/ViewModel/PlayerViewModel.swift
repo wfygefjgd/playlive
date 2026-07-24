@@ -513,8 +513,13 @@ final class PlayerViewModel: ObservableObject {
         }
         if triedLineIndices.count >= ch.sourceCount || scanned >= ch.sourceCount {
             autoSwitchState = .idle
-            showIndicator("当前频道线路均不可用")
+            showIndicator("当前频道所有线路不可用，切下一频道")
             beginCooldown()
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard !Task.isCancelled else { return }
+                nextChannel()
+            }
             return
         }
 
@@ -553,6 +558,7 @@ final class PlayerViewModel: ObservableObject {
 
     func nextChannel() {
         guard !locked, !channels.isEmpty else { return }
+        cooldownTask?.cancel()
         currentIndex = (currentIndex + 1) % channels.count
         currentSourceIndex = 0
         panelVisible = false

@@ -118,6 +118,7 @@ final class WindowVideoSurface {
         guard let window = Self.keyWindow() else { return }
 
         window.backgroundColor = .black
+        window.clipsToBounds = false
         if let root = window.rootViewController?.view {
             root.backgroundColor = .clear
             root.isOpaque = false
@@ -134,6 +135,7 @@ final class WindowVideoSurface {
         let full = window.bounds
         host.frame = full
         host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        host.clipsToBounds = false
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -156,9 +158,14 @@ final class WindowVideoSurface {
 
         window.rootViewController?.setNeedsUpdateOfHomeIndicatorAutoHidden()
         window.rootViewController?.setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
+
+        if reason == "host-appear" || reason == "anchor-window" {
+            schedulePasses()
+            startBriefDisplayLink()
+        }
     }
 
-    /// First ~2s: layout every frame (Home Indicator inset settles after first frames)
+    /// First ~6s: layout every frame (Home Indicator inset settles after first frames)
     private func startBriefDisplayLink() {
         displayLink?.invalidate()
         displayLinkTicks = 0
@@ -170,7 +177,7 @@ final class WindowVideoSurface {
     fileprivate func onDisplayLinkTick() {
         displayLinkTicks += 1
         install(reason: "displayLink")
-        if displayLinkTicks >= 120 {
+        if displayLinkTicks >= 360 {
             displayLink?.invalidate()
             displayLink = nil
         }
@@ -179,7 +186,7 @@ final class WindowVideoSurface {
     private func schedulePasses() {
         delayItems.forEach { $0.cancel() }
         delayItems.removeAll()
-        for t in [0.0, 0.03, 0.08, 0.15, 0.3, 0.5, 0.8, 1.2, 2.0, 3.0] {
+        for t in [0.0, 0.03, 0.08, 0.15, 0.3, 0.5, 0.8, 1.2, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0] {
             let item = DispatchWorkItem { [weak self] in self?.install(reason: "delay-\(t)") }
             delayItems.append(item)
             DispatchQueue.main.asyncAfter(deadline: .now() + t, execute: item)
@@ -277,6 +284,8 @@ final class RootHostingController<Content: View>: UIHostingController<Content> {
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
         WindowVideoSurface.shared.install(reason: "safeArea")
+        WindowVideoSurface.shared.schedulePasses()
+        WindowVideoSurface.shared.startBriefDisplayLink()
         NotificationCenter.default.post(name: .tvPlayerNeedsRelayout, object: nil)
     }
 
