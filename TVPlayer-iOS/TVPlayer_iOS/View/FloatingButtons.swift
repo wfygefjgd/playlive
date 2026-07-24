@@ -41,7 +41,7 @@ struct FloatingButtons: View {
                             onToggleLock()
                             haptic(.medium)
                         },
-                        onLongLock: onLongLock
+                        onLongPress: onLongLock
                     )
                     Spacer()
                 }

@@ -32,8 +32,9 @@ class M3UParserService {
                 let key = normalizeName(display)
                 // 央视统一进「央视」分组，避免 CCTV-15/17 落在未分组
                 let group = isCCTVKey(key) ? "央视" : pendingGroup
-                if let existing = channels[key] {
+                if var existing = channels[key] {
                     existing.addUrl(line)
+                    channels[key] = existing
                 } else {
                     var ch = Channel(name: display, group: group, key: key)
                     ch.addUrl(line)
