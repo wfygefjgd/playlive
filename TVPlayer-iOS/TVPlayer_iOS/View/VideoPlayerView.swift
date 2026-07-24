@@ -166,7 +166,7 @@ final class WindowVideoSurface {
     }
 
     /// First ~6s: layout every frame (Home Indicator inset settles after first frames)
-    private func startBriefDisplayLink() {
+    func startBriefDisplayLink() {
         displayLink?.invalidate()
         displayLinkTicks = 0
         let link = CADisplayLink(target: DisplayLinkProxy(owner: self), selector: #selector(DisplayLinkProxy.tick))
@@ -183,7 +183,7 @@ final class WindowVideoSurface {
         }
     }
 
-    private func schedulePasses() {
+    func schedulePasses() {
         delayItems.forEach { $0.cancel() }
         delayItems.removeAll()
         for t in [0.0, 0.03, 0.08, 0.15, 0.3, 0.5, 0.8, 1.2, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0] {
