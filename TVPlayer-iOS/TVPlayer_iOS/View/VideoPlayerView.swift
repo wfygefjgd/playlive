@@ -3,7 +3,7 @@ import AVKit
 import UIKit
 import Combine
 
-/// Contain (no crop) + first-launch relayout like resume
+/// Stretch full screen + first-launch relayout like resume
 final class FullScreenPlayerViewController: UIViewController {
     private let playerLayer = AVPlayerLayer()
     private var cancellables = Set<AnyCancellable>()
@@ -17,7 +17,7 @@ final class FullScreenPlayerViewController: UIViewController {
         view.backgroundColor = .black
         view.clipsToBounds = false
         view.isOpaque = true
-        playerLayer.videoGravity = .resizeAspect
+        playerLayer.videoGravity = .resize
         playerLayer.backgroundColor = UIColor.black.cgColor
         view.layer.addSublayer(playerLayer)
 
@@ -81,7 +81,7 @@ final class FullScreenPlayerViewController: UIViewController {
 
     func bind(player: AVPlayer?) {
         playerLayer.player = player
-        playerLayer.videoGravity = .resizeAspect
+        playerLayer.videoGravity = .resize
         forceRelayout()
     }
 
@@ -145,7 +145,7 @@ final class FullScreenPlayerViewController: UIViewController {
                 playerLayer.frame = view.bounds
             }
         }
-        playerLayer.videoGravity = .resizeAspect
+        playerLayer.videoGravity = .resize
         playerLayer.isHidden = false
         playerLayer.opacity = 1
         CATransaction.commit()
@@ -175,3 +175,4 @@ struct VideoPlayerView: UIViewControllerRepresentable {
 extension Notification.Name {
     static let tvPlayerNeedsRelayout = Notification.Name("tvPlayerNeedsRelayout")
 }
+
