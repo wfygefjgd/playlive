@@ -58,7 +58,7 @@ struct ContentView: View {
                 VStack(spacing: 12) {
                     Text("暂无频道")
                         .foregroundColor(.white)
-                    Button("重新加载�?) { vm.retryLoadSources() }
+                    Button("重新加载源") { vm.retryLoadSources() }
                         .buttonStyle(.borderedProminent)
                 }
                 .padding(24)
@@ -124,7 +124,7 @@ struct ContentView: View {
         }
         .then { base in
             if #available(iOS 17.0, *) {
-                return AnyView(base.onKeyPress(handleKeyPress))
+                return AnyView(base.onKeyPress { press in handleKeyPress(press) })
             } else {
                 return AnyView(base)
             }
@@ -144,7 +144,7 @@ struct ContentView: View {
             Button("取消", role: .cancel) { }
             Button("删除", role: .destructive) { vm.doDeleteLine() }
         } message: {
-            Text("确定删除当前线路�?)
+            Text("确定删除当前线路？")
         }
     }
 
@@ -255,7 +255,7 @@ struct ContentView: View {
             guard !Task.isCancelled else { return }
             await MainActor.run { confirmNumberInput() }
         }
-        // 超过 4 位自动确�?        if numberInput.count >= 4 {
+        if numberInput.count >= 4 {
             confirmNumberInput()
         }
     }
