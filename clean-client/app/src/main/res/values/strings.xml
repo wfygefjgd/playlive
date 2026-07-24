@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CleanPlayer</string>
+    <string name="tab_home">首页</string>
+    <string name="tab_short">短视频</string>
+    <string name="tab_mine">我的</string>
+    <string name="loading">加载中…</string>
+    <string name="retry">重试</string>
+    <string name="line_check">线路检测中…</string>
+    <string name="no_data">暂无数据</string>
+    <string name="search">搜索</string>
+    <string name="play">播放</string>
+</resources>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#FF0F0F12</color>
+    <color name="bg_card">#FF1A1A20</color>
+    <color name="primary">#FF6C5CE7</color>
+    <color name="text">#FFFFFFFF</color>
+    <color name="text_secondary">#FFAAAAAA</color>
+    <color name="divider">#33FFFFFF</color>
+    <color name="nav_bg">#FF16161C</color>
+</resources>

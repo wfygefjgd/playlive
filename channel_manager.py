@@ -7,13 +7,40 @@ import time
 
 class Channel:
     """频道类"""
-    def __init__(self, name: str, url: str, group: str = "", logo: str = ""):
-        self.name = name
-        self.url = url
-        self.group = group
-        self.logo = logo
+    def __init__(self, name: str, url: str = "", group: str = "", logo: str = "", urls: list = None):
+        self.name = (name or "未知").strip() or "未知"
+        self.group = (group or "未分组").strip() or "未分组"
+        self.logo = logo or ""
         self.is_available = None
         self.response_time = 0
+        self._urls: list = []
+        if urls:
+            for u in urls:
+                self.add_url(u)
+        elif url:
+            self.add_url(url)
+
+    @property
+    def url(self) -> str:
+        return self._urls[0] if self._urls else ""
+
+    @url.setter
+    def url(self, value: str):
+        if value and value.strip():
+            clean = value.strip()
+            if clean not in self._urls:
+                self._urls.insert(0, clean)
+
+    def add_url(self, url: str):
+        clean = (url or "").strip()
+        if clean and clean not in self._urls:
+            self._urls.append(clean)
+
+    def get_urls(self) -> list:
+        return list(self._urls)
+
+    def get_source_count(self) -> int:
+        return len(self._urls)
 
 
 class ChannelManager:
@@ -78,45 +105,45 @@ class ChannelManager:
         """解析M3U格式的直播源"""
         self.channels.clear()
         self.groups.clear()
-        
+
+        from collections import OrderedDict
+        channels_map: "OrderedDict[str, Channel]" = OrderedDict()
+
         lines = content.strip().split('\n')
-        current_channel = None
-        
+        pending_name = None
+        pending_group = "未分组"
+        pending_logo = ""
+
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-                
+
             if line.startswith('#EXTINF:'):
-                # 解析频道信息
                 info = line[8:]
-                
-                # 提取group-title
                 group_match = re.search(r'group-title="([^"]*)"', info)
-                group = group_match.group(1) if group_match else "其他频道"
-                
-                # 提取tvg-logo
+                pending_group = group_match.group(1) if group_match else "其他频道"
                 logo_match = re.search(r'tvg-logo="([^"]*)"', info)
-                logo = logo_match.group(1) if logo_match else ""
-                
-                # 提取频道名称(逗号后面的部分)
+                pending_logo = logo_match.group(1) if logo_match else ""
                 name_match = re.search(r',(.+)$', info)
-                name = name_match.group(1).strip() if name_match else "未知频道"
-                
-                current_channel = Channel(name=name, url="", group=group, logo=logo)
-            elif line.startswith('#') or not current_channel:
+                pending_name = name_match.group(1).strip() if name_match else "未知频道"
+            elif line.startswith('#') or pending_name is None:
                 continue
             else:
-                # 这是URL行
-                current_channel.url = line
-                self.channels.append(current_channel)
-                
-                # 按组分类
-                if current_channel.group not in self.groups:
-                    self.groups[current_channel.group] = []
-                self.groups[current_channel.group].append(current_channel)
-                
-                current_channel = None
+                # 合并同名频道的多个 URL
+                key = pending_name.lower().strip()
+                if key not in channels_map:
+                    channels_map[key] = Channel(name=pending_name, group=pending_group, logo=pending_logo)
+                channels_map[key].add_url(line)
+                pending_name = None
+                pending_group = "未分组"
+                pending_logo = ""
+
+        self.channels = list(channels_map.values())
+        for ch in self.channels:
+            if ch.group not in self.groups:
+                self.groups[ch.group] = []
+            self.groups[ch.group].append(ch)
     
     def check_channel_availability(self, channel: Channel, timeout: int = 5) -> bool:
         """检测频道是否可用"""
@@ -143,7 +170,7 @@ class ChannelManager:
     
     def switch_source(self) -> bool:
         """切换到下一个源"""
-        self.current_source_index += 1
+        self.current_source_index = (self.current_source_index + 1) % len(self.SOURCE_URLS)
         return self.fetch_source()
     
     def refresh(self) -> bool:

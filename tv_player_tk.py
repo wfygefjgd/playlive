@@ -82,17 +82,18 @@ MIRROR_PREFIXES = [
 ]
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-HTTP_TIMEOUT = 12
+HTTP_TIMEOUT = 10
 CHANNEL_OSD_MS = 2500
-CHANNEL_SWITCH_TIMEOUT_MS = 7000
-STALL_TIMEOUT_MS = 7000
+CHANNEL_SWITCH_TIMEOUT_MS = 4000
+STALL_TIMEOUT_MS = 3500
 FLOAT_HIDE_MS = 2500
+FAST_FAIL_TIMEOUT_MS = 2000
 
 MPV_CANDIDATES = [
     Path.home() / "mpv" / "mpv.exe",
-    Path(r"C:\Users\96335\mpv\mpv.exe"),
     Path(r"C:\mpv\mpv.exe"),
     Path(r"C:\Program Files\mpv\mpv.exe"),
+    Path(r"C:\Program Files (x86)\mpv\mpv.exe"),
     Path("mpv"),
 ]
 
@@ -412,6 +413,8 @@ class MpvPlayer:
         self.ipc = ""
         self.volume = 80
         self.paused = False
+        self._last_time_pos = -1.0
+        self._last_check_time = 0.0
 
     def play(self, url: str, wid: int) -> bool:
         self.stop()
@@ -419,6 +422,8 @@ class MpvPlayer:
             return False
         name = f"mpv-tv-{uuid.uuid4().hex}"
         self.ipc = rf"\\.\pipe\{name}" if os.name == "nt" else str(CONFIG_DIR / f"{name}.sock")
+        self._last_time_pos = -1.0
+        self._last_check_time = 0.0
         cmd = [
             self.path,
             f"--wid={wid}",
@@ -427,13 +432,15 @@ class MpvPlayer:
             "--keep-open=yes",
             "--idle=yes",
             "--cache=yes",
-            "--cache-secs=3",
-            "--demuxer-max-bytes=50MiB",
+            "--cache-secs=2",
+            "--demuxer-max-bytes=20MiB",
+            "--demuxer-readahead-secs=3",
             f"--volume={self.volume}",
             f"--input-ipc-server={self.ipc}",
             "--input-default-bindings=no",
             "--osc=no",
             "--osd-level=0",
+            "--profile=low-latency",
             url,
         ]
         try:
@@ -451,7 +458,7 @@ class MpvPlayer:
         if self.proc:
             try:
                 self.proc.terminate()
-                self.proc.wait(timeout=2)
+                self.proc.wait(timeout=1.5)
             except Exception:
                 try:
                     self.proc.kill()
@@ -459,42 +466,98 @@ class MpvPlayer:
                     pass
             self.proc = None
         self.paused = False
+        self._last_time_pos = -1.0
 
     def alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
+
+    def get_property(self, name: str):
+        if not self.ipc or not self.alive():
+            return None
+        req_id = uuid.uuid4().int % 100000
+        payload = (json.dumps({"command": ["get_property", name], "request_id": req_id}) + "\n").encode("utf-8")
+        resp = self._ipc_recv(payload, timeout=0.3)
+        if resp is None:
+            return None
+        try:
+            data = json.loads(resp.decode("utf-8").strip())
+            return data.get("data")
+        except Exception:
+            return None
+
+    def is_stalled(self) -> bool:
+        if not self.alive():
+            return True
+        idle = self.get_property("idle-active")
+        core_idle = self.get_property("core-idle")
+        if idle and core_idle:
+            return True
+        time_pos = self.get_property("time-pos")
+        now = time.time()
+        if time_pos is not None:
+            if self._last_time_pos < 0:
+                self._last_time_pos = time_pos
+                self._last_check_time = now
+                return False
+            if time_pos > self._last_time_pos + 0.1:
+                self._last_time_pos = time_pos
+                self._last_check_time = now
+                return False
+            if now - self._last_check_time > 3.0:
+                return True
+            return False
+        if now - self._last_check_time > 4.0:
+            return True
+        return False
 
     def _ipc(self, command: dict) -> bool:
         if not self.ipc or not self.alive():
             return False
         payload = (json.dumps(command) + "\n").encode("utf-8")
+        return self._ipc_recv(payload, timeout=0.2) is not None
+
+    def _ipc_recv(self, payload: bytes, timeout: float = 0.3):
         if os.name == "nt":
-            try:
-                GENERIC_WRITE = 0x40000000
-                OPEN_EXISTING = 3
-                h = ctypes.windll.kernel32.CreateFileW(
-                    self.ipc, GENERIC_WRITE, 0, None, OPEN_EXISTING, 0, None
-                )
-                if h in (-1, 0xFFFFFFFF):
-                    return False
-                written = ctypes.c_ulong(0)
-                ok = ctypes.windll.kernel32.WriteFile(
-                    h, payload, len(payload), ctypes.byref(written), None
-                )
+            return self._ipc_windows(payload, timeout)
+        return self._ipc_unix(payload, timeout)
+
+    def _ipc_windows(self, payload: bytes, timeout: float):
+        try:
+            GENERIC_WRITE = 0x40000000
+            GENERIC_READ = 0x80000000
+            OPEN_EXISTING = 3
+            h = ctypes.windll.kernel32.CreateFileW(
+                self.ipc, GENERIC_WRITE | GENERIC_READ, 0, None, OPEN_EXISTING, 0, None
+            )
+            if h in (-1, 0xFFFFFFFF):
+                return None
+            written = ctypes.c_ulong(0)
+            ok = ctypes.windll.kernel32.WriteFile(
+                h, payload, len(payload), ctypes.byref(written), None
+            )
+            if not ok:
                 ctypes.windll.kernel32.CloseHandle(h)
-                return bool(ok)
-            except Exception:
-                return False
+                return None
+            buf = ctypes.create_string_buffer(4096)
+            read = ctypes.c_ulong(0)
+            ctypes.windll.kernel32.ReadFile(h, buf, 4096, ctypes.byref(read), None)
+            ctypes.windll.kernel32.CloseHandle(h)
+            return buf.raw[:read.value] if read.value > 0 else None
+        except Exception:
+            return None
+
+    def _ipc_unix(self, payload: bytes, timeout: float):
         try:
             import socket
-
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.settimeout(0.5)
+            s.settimeout(timeout)
             s.connect(self.ipc)
             s.sendall(payload)
+            resp = s.recv(4096)
             s.close()
-            return True
+            return resp if resp else None
         except Exception:
-            return False
+            return None
 
     def toggle_pause(self) -> bool:
         if self._ipc({"command": ["cycle", "pause"]}):
@@ -1008,7 +1071,7 @@ class TVPlayerApp:
                 self._cancel_stall()
                 self._flash_floats()
 
-        self._ready_id = self.root.after(1800, mark)
+        self._ready_id = self.root.after(1200, mark)
 
     def _arm_watch(self, token: int):
         if self._watch_id:
@@ -1018,24 +1081,34 @@ class TVPlayerApp:
             if token != self.playback_token:
                 return
             if self.player.alive():
-                self._watch_id = self.root.after(800, tick)
+                self._watch_id = self.root.after(500, tick)
                 return
             self.waiting_ready = False
             self._cancel_stall()
             self.switch_next_line("当前线路播放失败，切换下一线路")
 
-        self._watch_id = self.root.after(800, tick)
+        self._watch_id = self.root.after(500, tick)
 
     def _schedule_stall(self, timeout_ms: int, token: int):
         self._cancel_stall()
+        elapsed = [0]
+        check_interval = 400
 
-        def on_timeout():
+        def on_check():
             if token != self.playback_token or not self.waiting_ready:
                 return
-            self.waiting_ready = False
-            self.switch_next_line("当前线路加载超时，切换下一线路")
+            elapsed[0] += check_interval
+            if self.player.is_stalled():
+                self.waiting_ready = False
+                self.switch_next_line("当前线路卡顿，切换下一线路")
+                return
+            if elapsed[0] >= timeout_ms:
+                self.waiting_ready = False
+                self.switch_next_line("当前线路加载超时，切换下一线路")
+                return
+            self._stall_id = self.root.after(check_interval, on_check)
 
-        self._stall_id = self.root.after(timeout_ms, on_timeout)
+        self._stall_id = self.root.after(check_interval, on_check)
 
     def _cancel_stall(self):
         if self._stall_id:
@@ -1070,7 +1143,7 @@ class TVPlayerApp:
         nxt = (self.current_source_index + 1) % ch.source_count
         self.current_source_index = nxt
         self.show_tip(hint)
-        self.play_current(True, STALL_TIMEOUT_MS)
+        self.play_current(True, FAST_FAIL_TIMEOUT_MS)
 
     def next_channel(self):
         if self.locked or not self.channels:

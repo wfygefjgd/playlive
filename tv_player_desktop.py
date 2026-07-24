@@ -45,10 +45,11 @@ DEFAULT_MIRRORS = [
     "https://raw.kkgithub.com/best-fan/iptv-sources/master/cn_all_status.m3u8",
 ]
 CHANNEL_OSD_MS = 2500
-CHANNEL_SWITCH_TIMEOUT_MS = 7000
-STALL_TIMEOUT_MS = 7000
-NETWORK_WAIT_RETRY_MS = 1000
+CHANNEL_SWITCH_TIMEOUT_MS = 4000
+STALL_TIMEOUT_MS = 3500
+NETWORK_WAIT_RETRY_MS = 800
 FLOAT_BUTTONS_TIMEOUT_MS = 2500
+FAST_FAIL_TIMEOUT_MS = 2000
 
 HTTP_UA = "Mozilla/5.0 (Linux; Android 10)"
 HTTP_CONNECT_TIMEOUT = 8
@@ -345,9 +346,9 @@ class StorageHelper:
 def find_mpv() -> Optional[str]:
     candidates = [
         Path.home() / "mpv" / "mpv.exe",
-        Path(r"C:\Users\96335\mpv\mpv.exe"),
         Path(r"C:\mpv\mpv.exe"),
         Path(r"C:\Program Files\mpv\mpv.exe"),
+        Path(r"C:\Program Files (x86)\mpv\mpv.exe"),
         "mpv",
     ]
     for c in candidates:
@@ -365,7 +366,7 @@ def find_mpv() -> Optional[str]:
 
 
 class PlayerEngine:
-    """对应 ExoPlayer 的最小能力: play / pause / stop / error 检测"""
+    """mpv 播放器引擎 — 支持 IPC 实时状态查询的智能切换"""
 
     def __init__(self, mpv_path: Optional[str]):
         self.mpv_path = mpv_path
@@ -377,6 +378,9 @@ class PlayerEngine:
         self.on_ready: Optional[Callable[[], None]] = None
         self._watch_thread: Optional[threading.Thread] = None
         self._token = 0
+        self._last_time_pos: float = -1.0
+        self._last_check_time: float = 0.0
+        self._stall_count: int = 0
 
     def set_media_and_play(self, url: str, wid: int) -> bool:
         self.stop()
@@ -384,6 +388,9 @@ class PlayerEngine:
             return False
         pipe = f"tvplayer-{uuid.uuid4().hex}"
         self.ipc_name = rf"\\.\pipe\{pipe}" if os.name == "nt" else str(PREF_DIR / f"{pipe}.sock")
+        self._last_time_pos = -1.0
+        self._last_check_time = 0.0
+        self._stall_count = 0
         cmd = [
             self.mpv_path,
             f"--wid={wid}",
@@ -392,13 +399,15 @@ class PlayerEngine:
             "--keep-open=yes",
             "--idle=yes",
             "--cache=yes",
-            "--cache-secs=3",
-            "--demuxer-max-bytes=50MiB",
+            "--cache-secs=2",
+            "--demuxer-max-bytes=20MiB",
+            "--demuxer-readahead-secs=3",
             f"--volume={self.volume}",
             f"--input-ipc-server={self.ipc_name}",
             "--input-default-bindings=no",
             "--osc=no",
             "--osd-level=0",
+            "--profile=low-latency",
             url,
         ]
         try:
@@ -414,7 +423,6 @@ class PlayerEngine:
             self._token += 1
             token = self._token
             self._start_watch(token)
-            # 进程存活一段时间视为接近 READY
             threading.Thread(
                 target=self._ready_probe, args=(token,), daemon=True
             ).start()
@@ -425,7 +433,7 @@ class PlayerEngine:
             return False
 
     def _ready_probe(self, token: int) -> None:
-        time.sleep(1.8)
+        time.sleep(1.0)
         if token != self._token:
             return
         if self.is_alive() and self.on_ready:
@@ -434,15 +442,62 @@ class PlayerEngine:
     def _start_watch(self, token: int) -> None:
         def loop():
             while token == self._token:
-                time.sleep(0.8)
+                time.sleep(0.5)
                 if token != self._token:
                     return
                 if not self.is_alive():
                     if self.on_error:
                         self.on_error()
                     return
+                state = self.get_playback_state()
+                if state is None:
+                    continue
+                if state.get("idle-active") and state.get("core-idle"):
+                    if self.on_error:
+                        self.on_error()
+                    return
 
         threading.Thread(target=loop, daemon=True).start()
+
+    def get_playback_state(self) -> Optional[dict]:
+        """通过 mpv IPC 查询实时播放状态"""
+        if not self.is_alive():
+            return None
+        result = {}
+        props = ["idle-active", "pause", "time-pos", "demuxer-cache-time", "percent-pos", "core-idle"]
+        for prop in props:
+            val = self._get_property(prop)
+            if val is not None:
+                result[prop] = val
+        return result if result else None
+
+    def is_stalled(self) -> bool:
+        """检测是否卡顿：time-pos 长时间不增加"""
+        state = self.get_playback_state()
+        if state is None:
+            return True
+        if state.get("idle-active") and state.get("core-idle"):
+            return True
+        time_pos = state.get("time-pos")
+        now = time.time()
+        if time_pos is not None:
+            if self._last_time_pos < 0:
+                self._last_time_pos = time_pos
+                self._last_check_time = now
+                return False
+            if time_pos > self._last_time_pos + 0.1:
+                self._last_time_pos = time_pos
+                self._last_check_time = now
+                self._stall_count = 0
+                return False
+            if now - self._last_check_time > 3.0:
+                self._stall_count += 1
+                self._last_check_time = now
+                return True
+            return False
+        if now - self._last_check_time > 4.0:
+            return True
+        return False
 
     def is_alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
@@ -469,7 +524,7 @@ class PlayerEngine:
         if self.proc:
             try:
                 self.proc.terminate()
-                self.proc.wait(timeout=2)
+                self.proc.wait(timeout=1.5)
             except Exception:
                 try:
                     self.proc.kill()
@@ -477,6 +532,8 @@ class PlayerEngine:
                     pass
             self.proc = None
         self.playing = False
+        self._last_time_pos = -1.0
+        self._stall_count = 0
 
     def clear_media_items(self) -> None:
         self.stop()
@@ -489,36 +546,69 @@ class PlayerEngine:
         self.set_volume(self.volume + delta)
         return self.volume
 
+    def _get_property(self, name: str):
+        """通过 mpv IPC 获取单个属性值"""
+        if not self.ipc_name or not self.is_alive():
+            return None
+        req_id = uuid.uuid4().int % 100000
+        payload = (json.dumps({"command": ["get_property", name], "request_id": req_id}) + "\n").encode("utf-8")
+        resp = self._ipc_call(payload, timeout=0.3)
+        if resp is None:
+            return None
+        try:
+            data = json.loads(resp.decode("utf-8").strip())
+            return data.get("data")
+        except Exception:
+            return None
+
     def _cmd(self, command: list) -> bool:
         if not self.ipc_name or not self.is_alive():
             return False
         payload = (json.dumps({"command": command}) + "\n").encode("utf-8")
+        return self._ipc_call(payload, timeout=0.2) is not None
+
+    def _ipc_call(self, payload: bytes, timeout: float = 0.3) -> Optional[bytes]:
+        """IPC 调用并等待响应"""
         if os.name == "nt":
-            try:
-                GENERIC_WRITE = 0x40000000
-                OPEN_EXISTING = 3
-                h = ctypes.windll.kernel32.CreateFileW(
-                    self.ipc_name, GENERIC_WRITE, 0, None, OPEN_EXISTING, 0, None
-                )
-                if h in (-1, 0xFFFFFFFF):
-                    return False
-                written = ctypes.c_ulong(0)
-                ok = ctypes.windll.kernel32.WriteFile(
-                    h, payload, len(payload), ctypes.byref(written), None
-                )
+            return self._ipc_call_windows(payload, timeout)
+        return self._ipc_call_unix(payload, timeout)
+
+    def _ipc_call_windows(self, payload: bytes, timeout: float) -> Optional[bytes]:
+        try:
+            GENERIC_WRITE = 0x40000000
+            GENERIC_READ = 0x80000000
+            OPEN_EXISTING = 3
+            h = ctypes.windll.kernel32.CreateFileW(
+                self.ipc_name, GENERIC_WRITE | GENERIC_READ, 0, None, OPEN_EXISTING, 0, None
+            )
+            if h in (-1, 0xFFFFFFFF):
+                return None
+            written = ctypes.c_ulong(0)
+            ok = ctypes.windll.kernel32.WriteFile(
+                h, payload, len(payload), ctypes.byref(written), None
+            )
+            if not ok:
                 ctypes.windll.kernel32.CloseHandle(h)
-                return bool(ok)
-            except Exception:
-                return False
+                return None
+            buf = ctypes.create_string_buffer(4096)
+            read = ctypes.c_ulong(0)
+            ctypes.windll.kernel32.ReadFile(h, buf, 4096, ctypes.byref(read), None)
+            ctypes.windll.kernel32.CloseHandle(h)
+            return buf.raw[:read.value] if read.value > 0 else None
+        except Exception:
+            return None
+
+    def _ipc_call_unix(self, payload: bytes, timeout: float) -> Optional[bytes]:
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.settimeout(0.4)
+            s.settimeout(timeout)
             s.connect(self.ipc_name)
             s.sendall(payload)
+            resp = s.recv(4096)
             s.close()
-            return True
+            return resp if resp else None
         except Exception:
-            return False
+            return None
 
 
 # =============================================================================
@@ -1184,11 +1274,7 @@ class MainActivity:
                 self.show_indicator("默认源不能删除")
                 return
             dialog_sources.pop(idx)
-            self.source_urls = [DEFAULT_SOURCE_URL] + [
-                u for u in dialog_sources if u != DEFAULT_SOURCE_URL
-            ]
-            # 保持 dialog 列表与 source_urls 同步
-            # Android: sourceUrls.clear(); add DEFAULT; addAll dialogSources
+            # 重建 source_urls：默认源始终第一，其余按 dialog 顺序
             self.source_urls = [DEFAULT_SOURCE_URL]
             for u in dialog_sources:
                 if u not in self.source_urls:
@@ -1285,15 +1371,28 @@ class MainActivity:
             return
         self.cancel_stall_check()
         token = self.playback_token
+        check_interval = 400
+        elapsed = [0]
 
-        def on_timeout():
-            if token == self.playback_token and self.waiting_for_ready:
+        def on_check():
+            if token != self.playback_token or not self.waiting_for_ready:
+                return
+            elapsed[0] += check_interval
+            if self.player.is_stalled():
+                self.waiting_for_ready = False
+                self.switch_to_next_playable_source(
+                    "当前线路卡顿，切换下一线路", True
+                )
+                return
+            if elapsed[0] >= timeout_ms:
                 self.waiting_for_ready = False
                 self.switch_to_next_playable_source(
                     "当前线路加载超时，切换下一线路", True
                 )
+                return
+            self._stall_after = self.root.after(check_interval, on_check)
 
-        self._stall_after = self.root.after(timeout_ms, on_timeout)
+        self._stall_after = self.root.after(check_interval, on_check)
 
     def cancel_stall_check(self) -> None:
         if self._stall_after:
@@ -1343,7 +1442,7 @@ class MainActivity:
             if show_osd:
                 self.show_channel_osd()
             if self.panel_visible and not self.locked and show_osd:
-                self.root.after(300, self._auto_hide_panel_if_needed)
+                self.root.after(200, self._auto_hide_panel_if_needed)
         except Exception:
             self.waiting_for_ready = False
             self.cancel_stall_check()
@@ -1419,7 +1518,7 @@ class MainActivity:
             return
         self.current_source_index = nxt
         self.show_indicator(hint)
-        self.play_current(show_osd, STALL_TIMEOUT_MS)
+        self.play_current(show_osd, FAST_FAIL_TIMEOUT_MS)
 
     # ----- applyChannelLineRules / shouldSkipChannelLine -----
     def apply_channel_line_rules(

@@ -265,10 +265,11 @@ class MPVWidget(QWidget):
 
     def _find_mpv(self):
         mpv_paths = [
-            r"C:\Users\96335\mpv\mpv.exe",
-            "mpv",
+            str(Path.home() / "mpv" / "mpv.exe"),
             r"C:\mpv\mpv.exe",
             r"C:\Program Files\mpv\mpv.exe",
+            r"C:\Program Files (x86)\mpv\mpv.exe",
+            "mpv",
         ]
         for path in mpv_paths:
             try:

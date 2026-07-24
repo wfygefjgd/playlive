@@ -574,8 +574,6 @@ class MainWindow(QMainWindow):
 
         self.video = VideoWidget()
         main_layout.addWidget(self.video, 1)
-        self.video.set_volume(self._volume)
-        self._volume = 100
 
         self.setStyleSheet(DARK_QSS)
         QTimer.singleShot(100, self._refresh)
