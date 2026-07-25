@@ -10,11 +10,14 @@ private let AUTO_SWITCH_COOLDOWN_NS: UInt64 = 4_000_000_000
 private let SILENT_AUDIO_GRACE_NS: UInt64 = 5_000_000_000  // 5s 静音切换冷却
 
 let PRESET_SOURCES: [(name: String, url: String)] = [
-    ("默认源", DEFAULT_SOURCE_URL),
-    ("best-fan 全量", "https://ghproxy.net/https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_all.m3u8"),
-    ("TVBox", "https://ghfast.top/raw.githubusercontent.com/Supprise0901/TVBox_live/main/live.txt"),
-    ("vbskycn", "https://raw.githubusercontent.com/vbskycn/iptv/master/tv/tv.m3u"),
-    ("fanmingming", "https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv6.m3u"),
+    ("BurningC4 CDN", "https://iptv.burningc4.com/TV-IPV4.m3u"),
+    ("dongyubin 体育", "https://ghfast.top/raw.githubusercontent.com/dongyubin/IPTV/main/IPTV.m3u"),
+    ("肥羊 4K", "https://ghfast.top/raw.githubusercontent.com/gaotianliuyun/youshandefeiyang/main/live.m3u"),
+    ("hujingguang", "https://ghfast.top/raw.githubusercontent.com/hujingguang/ChinaIPTV/main/grouped.m3u8"),
+    ("fanmingming IPv6", "https://ghfast.top/raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv6.m3u"),
+    ("best-fan 全量", "https://gh-proxy.com/https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_all.m3u8"),
+    ("kongkongyo CCTV", "https://ghfast.top/raw.githubusercontent.com/kongkongyo/m3u8/main/iptv.m3u"),
+    ("iptv-org 中国", "https://ghfast.top/raw.githubusercontent.com/iptv-org/iptv/master/streams/cn.m3u"),
 ]
 
 private enum AutoSwitchState {
@@ -40,6 +43,10 @@ final class PlayerViewModel: ObservableObject {
     @Published var bootstrapMessage = "正在连接网络..."
     @Published var playerLayoutEpoch: Int = 0
 
+    // 🆕 智能融合相关
+    @Published var fusionMode: FusionMode = .smart
+    private let fusionEngine = SmartFusionEngine.shared
+
     let player = PlayerEngine()
     private let storage = StorageService()
     private var rawChannels: [Channel] = []
@@ -64,6 +71,12 @@ final class PlayerViewModel: ObservableObject {
         guard !started else { return }
         started = true
         favorites = storage.loadFavorites()
+
+        // 🆕 设置融合引擎的观察者
+        setupFusionObserver()
+
+        // 🆕 恢复融合模式设置
+        restoreFusionMode()
 
         // PlayerViewModel 已是 @MainActor，闭包回调无需再切主线程
         player.onReady = { [weak self] in self?.onPlayerReady() }
@@ -248,13 +261,20 @@ final class PlayerViewModel: ObservableObject {
             indicatorText = "加载中..."
         }
         let urls = preferActiveOnly ? [activeSourceUrl] : buildCandidates()
+
         Task {
-            var result = await NetworkService.shared.fetchWithCandidates(urls: urls)
-            if result.channels.isEmpty, preferActiveOnly {
-                result = await NetworkService.shared.fetchWithCandidates(urls: buildCandidates())
+            // 🆕 使用智能融合引擎
+            fusionEngine.onProgress = { [weak self] message in
+                self?.bootstrapMessage = message
             }
+
+            let (loaded, errMsg) = await fusionEngine.smartFusion(
+                sourceUrls: urls,
+                mode: fusionMode
+            )
+
             await MainActor.run {
-                onChannelsLoaded(result.channels, errorMessage: result.errorMessage, silent: silent)
+                onChannelsLoaded(loaded, errorMessage: errMsg, silent: silent)
             }
         }
     }
@@ -298,6 +318,11 @@ final class PlayerViewModel: ObservableObject {
             }
         } else {
             showIndicator("已加载 \(channels.count) 个频道")
+            // 🆕 显示融合结果
+            let totalLines = channels.reduce(0) { $0 + $1.sourceCount }
+            if totalLines > 1000 {
+                showIndicator("✨ \(channels.count) 个频道，\(totalLines) 条线路")
+            }
             playCurrent(showOSD: false, resetTried: true)
         }
     }
@@ -730,5 +755,50 @@ final class PlayerViewModel: ObservableObject {
         }
         showIndicator("已删除当前线路")
         playCurrent(resetTried: true)
+    }
+
+    // MARK: - 智能融合相关
+
+    /// 监听后台优化完成的通知
+    private func setupFusionObserver() {
+        NotificationCenter.default.addObserver(
+            forName: .channelsOptimized,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            if let optimized = notification.object as? [Channel] {
+                self.channels = self.applyRules(optimized)
+                let totalLines = optimized.reduce(0) { $0 + $1.sourceCount }
+                self.showIndicator("✨ 线路优化完成！\(optimized.count) 个频道，\(totalLines) 条线路")
+            }
+        }
+    }
+
+    /// 切换融合模式
+    func switchFusionMode(_ mode: FusionMode) {
+        fusionMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: "fusionMode")
+
+        let modeName: String
+        switch mode {
+        case .fast: modeName = "快速"
+        case .balanced: modeName = "平衡"
+        case .complete: modeName = "完整"
+        case .smart: modeName = "智能"
+        }
+
+        showIndicator("已切换到\(modeName)模式")
+
+        // 重新加载频道
+        loadChannels(force: true, silent: false, preferActiveOnly: false)
+    }
+
+    /// 从 UserDefaults 恢复融合模式设置
+    func restoreFusionMode() {
+        if let saved = UserDefaults.standard.string(forKey: "fusionMode"),
+           let mode = FusionMode(rawValue: saved) {
+            fusionMode = mode
+        }
     }
 }

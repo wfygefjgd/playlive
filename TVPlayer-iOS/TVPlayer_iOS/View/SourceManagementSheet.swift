@@ -5,6 +5,7 @@ struct SourceManagementSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var inputUrl = ""
     @State private var showInvalidAlert = false
+    @State private var showFusionSettings = false
 
     var body: some View {
         NavigationView {
@@ -46,6 +47,25 @@ struct SourceManagementSheet: View {
 
                 // 源列表
                 List {
+                    // 🆕 融合模式设置按钮
+                    Section {
+                        Button(action: { showFusionSettings = true }) {
+                            HStack {
+                                Image(systemName: "wand.and.stars")
+                                    .foregroundColor(.purple)
+                                Text("融合模式设置")
+                                    .foregroundColor(.primary)
+                                Spacer()
+                                Text(fusionModeText)
+                                    .foregroundColor(.secondary)
+                                    .font(.caption)
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+
                     Section {
                         ForEach(Array(vm.sourceUrls.enumerated()), id: \.offset) { (i, url) in
                             sourceRow(index: i, url: url)
@@ -78,11 +98,24 @@ struct SourceManagementSheet: View {
                     Button("关闭") { dismiss() }
                 }
             }
+            .sheet(isPresented: $showFusionSettings) {
+                FusionModeSettingsView()
+                    .environmentObject(vm)
+            }
         }
         .alert("地址无效", isPresented: $showInvalidAlert) {
             Button("确定", role: .cancel) { }
         } message: {
             Text("请输入以 http:// 或 https:// 开头的有效地址")
+        }
+    }
+
+    private var fusionModeText: String {
+        switch vm.fusionMode {
+        case .fast: return "快速"
+        case .balanced: return "平衡"
+        case .complete: return "完整"
+        case .smart: return "智能"
         }
     }
 

@@ -1,0 +1,118 @@
+{
+  "version": "1.0.0",
+  "last_updated": "2026-07-25",
+  "note": "TVPlayer iOS 智能多源融合配置文件",
+  "sources": [
+    {
+      "id": "burningc4-cdn",
+      "name": "BurningC4 中国源 (CDN)",
+      "url": "https://iptv.burningc4.com/TV-IPV4.m3u",
+      "type": "m3u",
+      "priority": 1,
+      "region": "cn",
+      "description": "Cloudflare R2 加速，国内访问快",
+      "mirrors": []
+    },
+    {
+      "id": "dongyubin-sports",
+      "name": "dongyubin 体育源",
+      "url": "https://raw.githubusercontent.com/dongyubin/IPTV/main/IPTV.m3u",
+      "type": "m3u",
+      "priority": 2,
+      "region": "cn",
+      "description": "2026年7月更新，包含体育和F1频道",
+      "mirrors": [
+        "https://ghfast.top/raw.githubusercontent.com/dongyubin/IPTV/main/IPTV.m3u",
+        "https://gh-proxy.com/https://raw.githubusercontent.com/dongyubin/IPTV/main/IPTV.m3u",
+        "https://raw.gitmirror.com/dongyubin/IPTV/main/IPTV.m3u"
+      ]
+    },
+    {
+      "id": "feiyang-4k",
+      "name": "肥羊 4K/8K 源",
+      "url": "https://raw.githubusercontent.com/gaotianliuyun/youshandefeiyang/main/live.m3u",
+      "type": "m3u",
+      "priority": 3,
+      "region": "cn",
+      "description": "高清4K/8K频道",
+      "mirrors": [
+        "https://ghfast.top/raw.githubusercontent.com/gaotianliuyun/youshandefeiyang/main/live.m3u",
+        "https://gh-proxy.com/https://raw.githubusercontent.com/gaotianliuyun/youshandefeiyang/main/live.m3u"
+      ]
+    },
+    {
+      "id": "hujingguang-grouped",
+      "name": "hujingguang 分组源",
+      "url": "https://raw.githubusercontent.com/hujingguang/ChinaIPTV/main/grouped.m3u8",
+      "type": "m3u8",
+      "priority": 4,
+      "region": "cn",
+      "description": "按分类分组的频道",
+      "mirrors": [
+        "https://ghfast.top/raw.githubusercontent.com/hujingguang/ChinaIPTV/main/grouped.m3u8",
+        "https://gh-proxy.com/https://raw.githubusercontent.com/hujingguang/ChinaIPTV/main/grouped.m3u8"
+      ]
+    },
+    {
+      "id": "fanmingming-ipv6",
+      "name": "fanmingming IPv6",
+      "url": "https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv6.m3u",
+      "type": "m3u",
+      "priority": 5,
+      "region": "cn",
+      "description": "支持 IPv4/IPv6 双栈",
+      "mirrors": [
+        "https://ghfast.top/raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv6.m3u",
+        "https://gh-proxy.com/https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv6.m3u"
+      ]
+    },
+    {
+      "id": "bestfan-all",
+      "name": "best-fan 全量源",
+      "url": "https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_all.m3u8",
+      "type": "m3u8",
+      "priority": 6,
+      "region": "cn",
+      "description": "每日自动检测更新的稳定源",
+      "mirrors": [
+        "https://ghfast.top/raw.githubusercontent.com/best-fan/iptv-sources/main/cn_all.m3u8",
+        "https://gh-proxy.com/https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_all.m3u8",
+        "https://raw.gitmirror.com/best-fan/iptv-sources/main/cn_all.m3u8"
+      ]
+    },
+    {
+      "id": "kongkongyo-cctv",
+      "name": "kongkongyo CCTV",
+      "url": "https://raw.githubusercontent.com/kongkongyo/m3u8/main/iptv.m3u",
+      "type": "m3u",
+      "priority": 7,
+      "region": "cn",
+      "description": "CCTV频道流畅稳定",
+      "mirrors": [
+        "https://ghfast.top/raw.githubusercontent.com/kongkongyo/m3u8/main/iptv.m3u"
+      ]
+    },
+    {
+      "id": "iptv-org-cn",
+      "name": "iptv-org 中国源",
+      "url": "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/cn.m3u",
+      "type": "m3u",
+      "priority": 8,
+      "region": "cn",
+      "description": "全球最大IPTV项目的中国频道",
+      "mirrors": [
+        "https://ghfast.top/raw.githubusercontent.com/iptv-org/iptv/master/streams/cn.m3u"
+      ]
+    }
+  ],
+  "update_instructions": {
+    "how_to_update": "编辑此文件，修改 url 或 mirrors 字段即可",
+    "how_to_add": "在 sources 数组中添加新的源对象",
+    "how_to_disable": "将不想用的源删除或注释掉"
+  },
+  "usage_tips": {
+    "no_proxy_needed": "所有源都使用了镜像地址，国内无需代理即可访问",
+    "cdn_first": "优先使用 CDN 源（burningc4），速度最快",
+    "auto_fallback": "App 会自动使用 mirrors 备用地址，单个源失效不影响整体"
+  }
+}
